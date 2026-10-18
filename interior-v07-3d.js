@@ -24,25 +24,25 @@ else part(.9,.7,.8,c,0,.4,0,group);
 function renderScene(){
 if(!scene)return;while(scene.children.length){const o=scene.children[0];scene.remove(o);o.traverse(node=>{node.geometry?.dispose();if(node.material){(Array.isArray(node.material)?node.material:[node.material]).forEach(m=>m.dispose())}})}
 objects=[];const d=getDeco(),n=d.size,cells=getCells(),half=n/2;
-scene.background=new T.Color(0xeaf1fc);
-scene.add(new T.HemisphereLight(0xffffff,0x8b785f,2.2));
-const light=new T.DirectionalLight(0xffffff,2);light.position.set(-4,11,7);scene.add(light);
+scene.background=new T.Color(0xc5dcee);
+scene.add(new T.HemisphereLight(0xffffff,0x8b785f,1.05));
+const light=new T.DirectionalLight(0xffffff,1.2);light.position.set(-4,11,7);scene.add(light);
 part(n,.16,n,textures[d.floor]||textures.floorwood,0,-.13,0,scene);
 part(n,2.8,.16,textures[d.wall]||textures.wallpink,0,1.3,-half,scene);
 part(.16,2.8,n,textures[d.wall]||textures.wallpink,-half,1.3,0,scene);
-for(let i=0;i<n*n;i++){const x=(i%n)-half+.5,z=Math.floor(i/n)-half+.5;const pad=part(.96,.025,.96,selectedCell===i?0xffde84:0xffffff,x,.002,z,scene);pad.material.transparent=true;pad.material.opacity=selectedCell===i?.42:.09;pad.userData.cell=i;objects.push(pad);const kind=cells[i];if(kind){const group=new T.Group();group.position.set(x,0,z);group.rotation.y=((d.rot[i]||0)*Math.PI/180);buildFurniture(kind,group);scene.add(group);group.traverse(o=>{if(o.isMesh){o.userData.cell=i;objects.push(o)}})}}
+for(let i=0;i<n*n;i++){const x=(i%n)-half+.5,z=Math.floor(i/n)-half+.5;const pad=part(.96,.025,.96,selectedCell===i?0xffb83f:0x5a453a,x,.002,z,scene);pad.material.transparent=true;pad.material.opacity=selectedCell===i?.52:.095;pad.userData.cell=i;objects.push(pad);const kind=cells[i];if(kind){const group=new T.Group();group.position.set(x,0,z);group.rotation.y=((d.rot[i]||0)*Math.PI/180);buildFurniture(kind,group);scene.add(group);group.traverse(o=>{if(o.isMesh){o.userData.cell=i;objects.push(o)}})}}
 }
 function pick(evt){const r=renderer.domElement.getBoundingClientRect();mouse.set((evt.clientX-r.left)/r.width*2-1,-(evt.clientY-r.top)/r.height*2+1);raycaster.setFromCamera(mouse,camera);const hits=raycaster.intersectObjects(objects,false);return hits.length?hits[0].object.userData.cell:null}
-function selectCell(i){if(i===null)return;const cells=getCells();if(selectedCell!==null&&selectedCell!==i&&cells[selectedCell]&&!cells[i]){cells[i]=cells[selectedCell];delete cells[selectedCell];const d=getDeco();d.rot[i]=d.rot[selectedCell]||0;delete d.rot[selectedCell];selectedCell=i;save();feedback='✨ 家具を移動したよ！';draw();return}
+function selectCell(i){if(i===null){feedback='床か家具をタップしてね！';draw();return}const cells=getCells();if(selectedCell!==null&&selectedCell!==i&&cells[selectedCell]&&!cells[i]){cells[i]=cells[selectedCell];delete cells[selectedCell];const d=getDeco();d.rot[i]=d.rot[selectedCell]||0;delete d.rot[selectedCell];selectedCell=null;save();feedback='✨ 家具を移動したよ！';draw();return}
 if(cells[i]){selectedCell=i;feedback='家具を選択中。空いている場所をタップすると移動できるよ！';draw();return}
-if(selectedCell!==null){selectedCell=null;renderScene();return}
+if(selectedCell!==null){selectedCell=null;feedback='家具の選択を解除したよ';draw();return}
 const f=furniture[roomItem];if(!f){return}
 if((s.owned[roomItem]||0)>0)s.owned[roomItem]--;else if(s.wood>=f.w&&s.stone>=f.s){s.wood-=f.w;s.stone-=f.s}else{selected={kind:roomItem,missingWood:Math.max(0,f.w-s.wood),missingStone:Math.max(0,f.s-s.stone)};view='study';startQuest();return}
 cells[i]=roomItem;save();feedback='✨ 新しい家具を置いたよ！';draw()
 }
 function mount(){const canvas=document.getElementById('kv3d');if(!canvas||!window.THREE)return;const rect=canvas.getBoundingClientRect();if(rect.width<2)return;
-if(renderer){renderer.dispose();renderer.domElement.remove();renderer=null}cancelAnimationFrame(anim);
-try{renderer=new T.WebGLRenderer({canvas,antialias:true,alpha:false,powerPreference:'low-power'});renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,1.5));renderer.setSize(rect.width,rect.height,false)}
+if(renderer){renderer.dispose();renderer=null}cancelAnimationFrame(anim);
+try{renderer=new T.WebGLRenderer({canvas,antialias:true,alpha:false,powerPreference:'low-power'});renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,1.5));renderer.setSize(rect.width,rect.height,false);renderer.outputColorSpace=T.SRGBColorSpace}
 catch(e){console.warn('WebGL unavailable',e);document.getElementById('kv3d-wrap').innerHTML='<p>この端末では3D表示が使えません。2D版に戻してください。</p>';return}
 scene=new T.Scene();camera=new T.PerspectiveCamera(44,rect.width/rect.height,.1,120);const n=getDeco().size;camera.position.set(n*.94,n*1.4,n*1.55);camera.lookAt(0,.4,0);renderScene();
 let azimuth=Math.atan2(camera.position.x,camera.position.z),zoom=camera.position.length();
@@ -59,7 +59,7 @@ window.kv3dStore=function(){if(selectedCell===null)return;const cs=getCells(),ki
 window.kv3dExpand=function(){if(getDeco().size===7)return;kv6expand();};
 const oldRoom=room;
 room=function(){const houses=Object.keys(s.world).filter(i=>s.world[i]==='house');if(!houses.length)return oldRoom();if(!houses.includes(String(house)))house=Number(houses[0]);const d=getDeco();const style=(field,values)=>values.map(v=>'<button class="tool" onclick="kv3dStyle(\''+field+'\',\''+v[0]+'\')">'+v[1]+'</button>').join('');
-return '<div class="twocol"><section class="panel"><h2>🏡 3D おへやづくり</h2><div id="kv3d-wrap" style="border-radius:18px;overflow:hidden;background:#eaf1fc"><canvas id="kv3d" style="display:block;width:100%;height:420px;touch-action:none"></canvas></div><p class="muted">空いた床をタップして家具を置こう。家具→空いた床で移動。指を横に動かして視点を回転！</p><div class="row"><button class="btn" onclick="kv3dRotate()">🔄 家具を回転</button><button class="btn" onclick="kv3dStore()">📦 収納</button></div>'+msg()+'</section><section class="panel"><h2>🎨 おへやのデザイン</h2><p>かべの色</p><div class="tools">'+style('wall',[['wallpink','🌸 ピンク'],['wallblue','💧 ブルー'],['wallgreen','🌿 グリーン']])+'</div><p>ゆか</p><div class="tools">'+style('floor',[['floorwood','🪵 木目'],['floortile','⬜ タイル'],['floorpink','🌷 ピンク']])+'</div><h2>🪑 家具</h2>'+tools(furniture,roomItem,'setRoomItem')+(d.size===5?'<button class="btn" onclick="kv3dExpand()">🏗️ 広げる（木材30・石材18）</button>':'<p>✨ 広いおへや</p>')+'</section></div>'};
+return '<div class="twocol"><section class="panel"><h2>🏡 3D おへやづくり</h2><div class="note">① 右の家具ショップで家具を選ぶ → ② 3Dの床をタップして置く。移動は家具をタップ → 空いた床をタップ。視点は指を横へ動かして回転。</div><div id="kv3d-wrap" style="border-radius:18px;overflow:hidden;background:#c5dcee"><canvas id="kv3d" style="display:block;width:100%;height:420px;touch-action:none"></canvas></div><p class="muted">空いた床をタップして家具を置こう。家具→空いた床で移動。指を横に動かして視点を回転！</p><div class="row"><button class="btn" onclick="kv3dRotate()">🔄 家具を回転</button><button class="btn" onclick="kv3dStore()">📦 収納</button></div>'+msg()+'</section><section class="panel"><h2>🎨 おへやのデザイン</h2><p>かべの色</p><div class="tools">'+style('wall',[['wallpink','🌸 ピンク'],['wallblue','💧 ブルー'],['wallgreen','🌿 グリーン']])+'</div><p>ゆか</p><div class="tools">'+style('floor',[['floorwood','🪵 木目'],['floortile','⬜ タイル'],['floorpink','🌷 ピンク']])+'</div><h2>🪑 家具</h2>'+tools(furniture,roomItem,'setRoomItem')+(d.size===5?'<button class="btn" onclick="kv3dExpand()">🏗️ 広げる（木材30・石材18）</button>':'<p>✨ 広いおへや</p>')+'</section></div>'};
 const oldDraw=draw;
 draw=function(){oldDraw();if(view==='room')requestAnimationFrame(mount);else if(renderer){cancelAnimationFrame(anim);renderer.dispose();renderer=null;scene=null}};
 })();
