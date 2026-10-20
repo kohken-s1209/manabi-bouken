@@ -10,7 +10,7 @@
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{margin:0;height:100%;overflow:hidden;background:#8ccfe6;color:var(--ink);overscroll-behavior:none}
 #app{position:fixed;inset:0;height:100vh;height:100dvh;overflow:hidden;user-select:none;-webkit-user-select:none}
-#scene{position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none}
+#scene{position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
 button{font:inherit;color:inherit;cursor:pointer}
 button:focus-visible{outline:3px solid #2b7bd0;outline-offset:2px}
 [hidden]{display:none!important}
@@ -62,6 +62,9 @@ button:focus-visible{outline:3px solid #2b7bd0;outline-offset:2px}
 .actionbar span{flex:1;min-width:0}
 .ok,.cancel{min-height:44px;min-width:76px;border-radius:999px;border:2px solid;font-weight:900;padding:0 16px}
 .ok{background:linear-gradient(#a6dd72,#6cae4f);border-color:#4b8a38;color:#fff;text-shadow:0 1px 0 #3a6f2a}
+.actionbar.lifted{border-color:#e0a63a;background:linear-gradient(#fffbe8,#ffeeb8)}
+.actionbar.lifted .ok{display:none}
+.actionbar.lifted .cancel{background:#fff;border-color:#d9663f;color:#b8431f;min-width:96px}
 .ok:disabled{background:#cdd2c0;border-color:#aeb3a2;color:#fff;text-shadow:none;cursor:not-allowed}
 .cancel{background:#fff;border-color:var(--edge);color:var(--ink2)}
 
