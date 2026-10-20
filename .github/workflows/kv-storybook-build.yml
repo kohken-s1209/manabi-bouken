@@ -1,0 +1,68 @@
+name: Knowledge Village storybook build (approved Issue command)
+on:
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  generate:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.number == 1 &&
+       github.event.comment.body == '/kv-build-storybook-v1' &&
+       github.event.comment.user.login == 'kohken-s1209')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Claude implementation (no git write access)
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_KV }}
+          prompt: |
+            This is an APPROVED one-shot task to implement a standalone, interactive
+            Knowledge Village storybook-style mobile UI demo. Read
+            storybook-demo/IMPLEMENTATION_BRIEF.md and prototype-v08/index.html.
+            ONLY create/edit files in storybook-demo/ (never touch IMPLEMENTATION_BRIEF.md).
+            The approved screenshot is unavailable as a file; do NOT falsely say
+            you have compared against it. Target warm illustrative fantasy world,
+            layered trees, waterfall/stream, grassy landscape, red-roof cottage,
+            cream HUD, sticky bottom buttons. Build real functional gameplay:
+            normal view no visible grid; grid on build/move only;
+            tile collision, building selection/move/storage, expansion,
+            simulated math/Japanese/English currency rewards.
+            Standalone web implementation with NO external runtime dependency,
+            NO secrets, NO access to child progress or original localStorage.
+            Use CSS, SVG with original authored drawings, or procedural graphics
+            where necessary; distinguish actual art from placeholders.
+            Make screen fill viewport, usable on Android tablet and phone.
+            Implement files storybook-demo/index.html, storybook-demo/style.css,
+            storybook-demo/app.js, storybook-demo/README.md.
+            Do not execute network downloads, or change workflows. No git operations.
+          claude_args: "--max-turns 35 --allowedTools Read,Glob,Grep,Write,Edit"
+      - name: Validate and package restricted demo files
+        shell: bash
+        run: |
+          set -euo pipefail
+          for file in index.html style.css app.js README.md; do
+            test -f "storybook-demo/$file"
+            test ! -L "storybook-demo/$file"
+            test "$(wc -c < "storybook-demo/$file")" -le 250000
+          done
+          mkdir -p kv-artifact
+          cp storybook-demo/{index.html,style.css,app.js,README.md} kv-artifact/
+          echo "Generated candidate files:"
+          ls -lh kv-artifact/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kv-storybook-candidate
+          path: kv-artifact/
+          if-no-files-found: error
+          retention-days: 7
