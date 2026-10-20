@@ -1,0 +1,61 @@
+name: Publish reviewed Knowledge Village candidate as Draft PR
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/kv-promote-candidate.yml
+
+permissions:
+  contents: read
+
+jobs:
+  promote-fixed-artifact:
+    if: github.repository == 'kohken-s1209/manabi-bouken'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Download fixed generated candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/kv-candidate
+          gh run download 39388819264 --repo kohken-s1209/manabi-bouken -n kv-storybook-candidate -D /tmp/kv-candidate
+      - name: Validate exact file set before copying
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd /tmp/kv-candidate
+          test "$(find . -type f | wc -l)" -eq 4
+          test "$(find . -type l | wc -l)" -eq 0
+          for f in index.html style.css app.js README.md; do
+            test -f "$f"
+            test "$(wc -c < "$f")" -lt 250000
+          done
+          node --check app.js
+          if grep -Eq 'localStorage|sessionStorage|XMLHttpRequest|eval\(' app.js; then echo 'Unexpected persistence/dynamic execution'; exit 1; fi
+      - name: Commit only isolated demo into new branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c demo/kv-storybook-first-candidate
+          mkdir -p storybook-demo
+          for f in index.html style.css app.js README.md; do
+            cp "/tmp/kv-candidate/$f" "storybook-demo/$f"
+          done
+          git add -- storybook-demo/index.html storybook-demo/style.css storybook-demo/app.js storybook-demo/README.md
+          git diff --cached --check
+          test "$(git diff --cached --name-only | wc -l)" -eq 4
+          git commit -m "Add Claude-generated isolated storybook UI candidate"
+          git -c http.extraheader="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" push https://github.com/kohken-s1209/manabi-bouken.git HEAD:refs/heads/demo/kv-storybook-first-candidate
+          gh pr create --repo kohken-s1209/manabi-bouken --base main --head demo/kv-storybook-first-candidate --draft --title "Knowledge Village: interactive storybook demo (first candidate)" --body "First Claude-generated isolated 4-file interactive prototype from Actions run 39388819264. Browser and visual QA pending; never merge before review. Does not modify main game or child saves."
