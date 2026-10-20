@@ -33,4 +33,4 @@ jobs:
             DO NOT edit files, commit, push, create PR, download untrusted scripts,
             read unrelated repositories, or inspect environment credentials.
             Identify missing art references and specific required asset types.
-          claude_args: "--max-turns 8 --allowedTools Read,Glob,Grep"
+          claude_args: "--max-turns 24 --allowedTools Read,Glob,Grep"
