@@ -1,0 +1,54 @@
+name: Knowledge Village storybook v2 feedback build
+on:
+  push:
+    branches: [main]
+    paths: [storybook-demo/V2_FEEDBACK.md]
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  generate-v2:
+    if: github.repository == 'kohken-s1209/manabi-bouken'
+    runs-on: ubuntu-latest
+    timeout-minutes: 22
+    steps:
+      - uses: actions/checkout@v4
+        with: {persist-credentials: false}
+      - name: Build improved standalone demo
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_KV }}
+          prompt: |
+            Task: apply EXACT approved changes listed in storybook-demo/V2_FEEDBACK.md.
+            Read that file and existing storybook-demo/index.html,
+            storybook-demo/style.css, storybook-demo/app.js, storybook-demo/README.md.
+            Edit ONLY these four runtime/demo files inside storybook-demo.
+            DO NOT modify V2_FEEDBACK.md, other files, CI, Secrets or git.
+            Solve visual overlap using projected tile footprints AND visual bounding
+            boxes and draw order; ensure moving buildings cannot overlap.
+            Implement long-press selection -> destination tap with cancellation.
+            Keep the UI, isometric angle, shadows. Rework foreground vegetation
+            to keep center interaction zone visible.
+            Graphics: improve illustrated richness but do not pretend a vector
+            drawing matches a supplied raster screenshot unless you can verify.
+            Deliver functioning offline HTML/CSS/Canvas JS, no new dependencies.
+            Do not execute external downloads or network requests.
+          claude_args: "--max-turns 50 --allowedTools Read,Glob,Grep,Write,Edit"
+      - name: Validate isolated output
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in index.html style.css app.js README.md; do
+            test -f "storybook-demo/$f"
+            test ! -L "storybook-demo/$f"
+            test "$(wc -c < "storybook-demo/$f")" -le 280000
+          done
+          node --check storybook-demo/app.js
+          mkdir -p kv-v2-artifact
+          cp storybook-demo/{index.html,style.css,app.js,README.md} kv-v2-artifact/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kv-storybook-v2-candidate
+          path: kv-v2-artifact/
+          if-no-files-found: error
+          retention-days: 7
