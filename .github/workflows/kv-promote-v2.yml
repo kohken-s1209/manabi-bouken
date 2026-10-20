@@ -1,0 +1,50 @@
+name: Promote Knowledge Village v2 candidate to review PR
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/kv-promote-v2.yml
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+
+jobs:
+  deliver-v2:
+    if: github.repository == 'kohken-s1209/manabi-bouken'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download fixed successful v2 output
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/kv-v2
+          gh run download 39395645315 -R kohken-s1209/manabi-bouken -n kv-storybook-v2-candidate -D /tmp/kv-v2
+      - name: Validate and create draft PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd /tmp/kv-v2
+          test "$(find . -type f | wc -l)" -eq 4
+          test "$(find . -type l | wc -l)" -eq 0
+          for f in index.html style.css app.js README.md; do
+            test -f "$f"
+            test "$(wc -c < "$f")" -lt 280000
+          done
+          node --check app.js
+          cd "$GITHUB_WORKSPACE"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch -c demo/kv-storybook-v2
+          cp /tmp/kv-v2/{index.html,style.css,app.js,README.md} storybook-demo/
+          git add -- storybook-demo/index.html storybook-demo/style.css storybook-demo/app.js storybook-demo/README.md
+          git diff --cached --check
+          test "$(git diff --cached --name-only | wc -l)" -eq 4
+          git commit -m 'Update isolated storybook demo to Claude v2 candidate'
+          git push origin HEAD:refs/heads/demo/kv-storybook-v2
+          gh pr create --base main --head demo/kv-storybook-v2 --draft --title 'Knowledge Village: Storybook v2 candidate' --body 'Claude-generated v2 candidate from verified run 39395645315. Isolated storybook-demo only. Review before publication.'
