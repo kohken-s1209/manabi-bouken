@@ -13,7 +13,7 @@ jobs:
       github.event.comment.user.login == 'kohken-s1209' &&
       github.event.comment.body == '/kv-build-storybook-v2'
     runs-on: ubuntu-latest
-    timeout-minutes: 22
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with: {persist-credentials: false}
@@ -36,7 +36,7 @@ jobs:
             drawing matches a supplied raster screenshot unless you can verify.
             Deliver functioning offline HTML/CSS/Canvas JS, no new dependencies.
             Do not execute external downloads or network requests.
-          claude_args: "--max-turns 50 --allowedTools Read,Glob,Grep,Write,Edit"
+          claude_args: "--max-turns 140 --allowedTools Read,Glob,Grep,Write,Edit"
       - name: Validate isolated output
         shell: bash
         run: |
