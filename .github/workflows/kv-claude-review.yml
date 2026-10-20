@@ -1,0 +1,35 @@
+name: Knowledge Village Claude design review (manual, read-only)
+# STAGING ONLY: workflow_dispatch becomes available when promoted to default branch.
+# NO issue/comment auto-trigger. NO write token. NO main push.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect-brief:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Require OAuth secret
+        env:
+          CLAUDE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_KV }}
+        run: |
+          if [ -z "$CLAUDE_OAUTH_TOKEN" ]; then
+            echo 'Missing CLAUDE_CODE_OAUTH_TOKEN_KV repository secret'; exit 1
+          fi
+      - name: Claude Code read-only implementation plan
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_KV }}
+          prompt: |
+            Read storybook-demo/IMPLEMENTATION_BRIEF.md and issue #1 reference.
+            Review the code structure and output a concise implementation plan.
+            DO NOT edit files, commit, push, create PR, download untrusted scripts,
+            read unrelated repositories, or inspect environment credentials.
+            Identify missing art references and specific required asset types.
+          claude_args: "--max-turns 8 --allowedTools Read,Glob,Grep"
