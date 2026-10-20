@@ -1,14 +1,17 @@
 name: Knowledge Village storybook v2 feedback build
 on:
-  push:
-    branches: [main]
-    paths: [storybook-demo/V2_FEEDBACK.md]
+  issue_comment:
+    types: [created]
 permissions:
   contents: read
   id-token: write
 jobs:
   generate-v2:
-    if: github.repository == 'kohken-s1209/manabi-bouken'
+    if: >-
+      github.repository == 'kohken-s1209/manabi-bouken' &&
+      github.event.issue.number == 1 &&
+      github.event.comment.user.login == 'kohken-s1209' &&
+      github.event.comment.body == '/kv-build-storybook-v2'
     runs-on: ubuntu-latest
     timeout-minutes: 22
     steps:
