@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#8ccfe6">
+<title>ナレッジビレッジ | 絵本の街づくり（操作デモ）</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <canvas id="scene" role="img" aria-label="森と滝と小川に囲まれた、赤い屋根の家がある絵本風の村"></canvas>
+
+  <header class="hud">
+    <div class="logo">
+      <svg class="crest" viewBox="0 0 48 48" aria-hidden="true">
+        <circle cx="24" cy="24" r="22" fill="#fff3cf" stroke="#c99a52" stroke-width="2.5"/>
+        <path d="M8 34c6-5 12-6 16-6s11 1 16 6c-3 5-9 8-16 8S11 39 8 34z" fill="#8fcb62"/>
+        <path d="M14 26l10-9 10 9v9H14z" fill="#f6dfb6" stroke="#8a5e36" stroke-width="1.5" stroke-linejoin="round"/>
+        <path d="M11 27l13-12 13 12" fill="none" stroke="#c4402f" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+        <rect x="21" y="28" width="6" height="7" rx="1.5" fill="#8a5e36"/>
+        <path d="M33 10c5 0 7 4 7 7-4 0-7-3-7-7z" fill="#5da24a"/>
+      </svg>
+      <div class="logo-text">
+        <h1>ナレッジビレッジ</h1>
+        <p>知識で育てる、あなただけの街</p>
+      </div>
+    </div>
+    <div class="badges" aria-label="しげん">
+      <div class="badge badge-land"><span id="hudLand">土地16マス</span><span id="hudPoints" class="sub">開拓点0</span></div>
+      <div class="badge" title="木材（算数）"><span class="ico" aria-hidden="true">🪵</span><b id="hudWood">28</b></div>
+      <div class="badge" title="本（国語）"><span class="ico" aria-hidden="true">📚</span><b id="hudBooks">0</b></div>
+      <div class="badge" title="交流（英語）"><span class="ico" aria-hidden="true">🌍</span><b id="hudGlobe">0</b></div>
+    </div>
+  </header>
+
+  <div id="hint" class="hint" role="status" aria-live="polite"></div>
+
+  <div id="fabs" class="fabs">
+    <button id="btnBuild" class="fab" type="button">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M6 16 16 7l10 9v10H6z" fill="#fff0cf" stroke="#8a5e36" stroke-width="1.8" stroke-linejoin="round"/><path d="M3 17 16 5l13 12" fill="none" stroke="#c4402f" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/><rect x="13" y="18" width="6" height="8" rx="1.5" fill="#8a5e36"/></svg>
+      <span>建てる</span>
+    </button>
+    <button id="btnStudy" class="fab" type="button">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M4 8c5-2 9-1 12 2 3-3 7-4 12-2v17c-5-2-9-1-12 2-3-3-7-4-12-2z" fill="#fff0cf" stroke="#8a5e36" stroke-width="1.8" stroke-linejoin="round"/><path d="M16 10v17" stroke="#8a5e36" stroke-width="1.8"/><path d="M8 13c2-.5 4 0 5 1M8 17c2-.5 4 0 5 1M19 14c1-1 3-1.500 5-1M19 18c1-1 3-1.500 5-1" stroke="#c99a52" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>
+      <span>学ぶ</span>
+    </button>
+  </div>
+
+  <div id="actionbar" class="actionbar" hidden>
+    <span id="actionText"></span>
+    <button id="actionOk" class="ok" type="button">OK</button>
+    <button id="actionCancel" class="cancel" type="button">やめる</button>
+  </div>
+
+  <section id="sheet" class="sheet" aria-live="polite">
+    <div class="sheet-head"><h2 id="sheetTitle"></h2><button id="sheetClose" class="close" type="button" aria-label="とじる">×</button></div>
+    <div id="sheetBody" class="sheet-body"></div>
+  </section>
+
+  <nav class="bar" aria-label="街のそうさ">
+    <button id="btnExpand" type="button" aria-pressed="false">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 14 28 20 16 26 4 20z" fill="#9bd36c" stroke="#5c8f3c" stroke-width="1.6" stroke-linejoin="round"/><path d="M16 4v10M11 9h10" stroke="#c4402f" stroke-width="3" stroke-linecap="round"/></svg>
+      <span>土地を拡張</span>
+    </button>
+    <button id="btnMove" type="button" aria-pressed="false">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 3v26M3 16h26" stroke="#6b4a2a" stroke-width="2.4" stroke-linecap="round"/><path d="M16 3l-4 5h8zM16 29l-4-5h8zM3 16l5-4v8zM29 16l-5-4v8z" fill="#6b4a2a"/></svg>
+      <span>建物を移動</span>
+    </button>
+    <button id="btnStore" type="button" aria-pressed="false">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M5 12 16 7l11 5v13l-11 4-11-4z" fill="#e7bd7d" stroke="#8a5e36" stroke-width="1.8" stroke-linejoin="round"/><path d="M5 12l11 5 11-5M16 17v12" stroke="#8a5e36" stroke-width="1.8" fill="none"/><path d="M11 9.500l11 5" stroke="#8a5e36" stroke-width="1.5"/></svg>
+      <span>建物をしまう</span>
+    </button>
+  </nav>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden><span id="toastText"></span><button id="toastUndo" type="button" hidden>元にもどす</button></div>
+
+  <div id="modal" class="modal" hidden>
+    <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <h3 id="modalTitle"></h3>
+      <p id="modalText"></p>
+      <div class="dialog-btns">
+        <button id="modalOk" class="ok" type="button">しまう</button>
+        <button id="modalCancel" class="cancel" type="button">やめる</button>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
