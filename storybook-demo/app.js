@@ -83,7 +83,10 @@ const curP = () => makeP(view.tw, view.cx, view.cy, view.c);
 
 function computeTarget() {
   const n = S.n, lo = loOf(n), ah = Math.max(120, area.bottom - area.top);
-  const twW = W * 0.70 / n;
+  // The camera is sized so the *clearing* (plot + meadow pad) fills a fixed share of the width. That share grows with
+  // the land, so early on a ring of forest stays visible beside the plot and later the meadow runs off the screen.
+  const st = n - N_MIN, half = n / 2 + clearPad(st) * .8;
+  const twW = W * lerp(.34, .62, st / 4) / half;
   const twH = ah * 0.88 / (n / 2 + 1.5);
   tgt.tw = clamp(Math.min(twW, twH), 24, 170);
   tgt.cx = W / 2;
@@ -291,7 +294,8 @@ function buildBackdrop(w, h, ratio, stage) {
 
   // meadow
   g = fr.createLinearGradient(0, hy - h * .03, 0, h);
-  g.addColorStop(0, '#a9d96a'); g.addColorStop(.5, '#8fcb5c'); g.addColorStop(1, '#6fb050');
+  // forest floor: deeper and cooler than the sunlit clearing painted on top of it, so the clearing reads as an opening in the woods
+  g.addColorStop(0, '#86b95c'); g.addColorStop(.5, '#6ba44d'); g.addColorStop(1, '#558f3f');
   fr.fillStyle = g;
   fr.beginPath(); fr.moveTo(0, h); fr.lineTo(0, hy);
   for (let x = 0; x <= w + 10; x += 10) fr.lineTo(x, hy - Math.sin(x * .012) * h * .012 - Math.sin(x * .031) * h * .006);
@@ -488,15 +492,15 @@ function nearStream(x, y, d) {
 const tufts = [];
 (function () {
   const cols = ['#fff6b0', '#ffb3c6', '#ffffff', '#ffd27a', '#c9b6ff', '#ff9a62', '#f4707e'];
-  for (let x = 0; x < WORLD; x++) for (let y = 0; y < WORLD; y++) {
-    const r = rng(x * 131 + y * 17 + 9), list = [];
+  for (let x = -7; x < WORLD + 7; x++) for (let y = -7; y < WORLD + 7; y++) {   // covers the widest clearing, not just the plot
+    const r = rng((x + 8) * 131 + (y + 8) * 17 + 9), list = [];
     for (let i = 0; i < 4; i++) list.push({dx: .12 + r() * .76, dy: .12 + r() * .76, f: r() < .3 ? cols[Math.floor(r() * 7)] : null});
     tufts.push({x, y, list});
   }
 })();
 
 /* A dirt road leaves the front-right edge of the plot toward the viewer; it gets wider as the village grows.
- * It stops at the plot edge (drawn before the lawn), so it never covers editable land. */
+ * It starts at the plot edge and is painted on the meadow, so it never covers editable land. */
 function drawPath(P) {
   const {lo, hi, tw} = view, grow = clamp(hi - lo - N_MIN, 0, 4), mid = (lo + hi) / 2;
   const a = P(hi + .05, mid + .4), e = [W + tw * 1.2, Math.min(H * .86, a[1] + tw * (2.6 + grow * .3))];
@@ -510,98 +514,88 @@ function drawPath(P) {
   ctx.strokeStyle = 'rgba(255,240,200,.55)'; ctx.lineWidth = wd * .35; ctx.setLineDash([tw * .12, tw * .28]); ctx.stroke(path);
   ctx.restore();
 }
+/* ---- The clearing -------------------------------------------------------------------------------------------
+ * The ground is one continuous, soft-edged meadow with an organic outline, not a tile slab. The outline is derived
+ * from the unlocked land size n: a rounded square that hugs the plot corners plus a margin ("pad") that grows with
+ * every expansion, with a gentle wobble so it never reads as a square. The tile grid stays logical (tap mapping,
+ * collisions, the build grid overlay); the same outline decides which trees, bushes and rocks may stand. */
+const CLEAR_P = 6;                                        // super-ellipse exponent: a rounded square, like the plot itself
+const CLEAR_PADS = [.8, 1.4, 2.1, 2.9, 3.8];               // meadow margin beyond the plot, in tiles, for 16 / 25 / 36 / 49 / 64
+function clearPad(st) { st = clamp(st, 0, 4); const i = Math.min(3, Math.floor(st)); return lerp(CLEAR_PADS[i], CLEAR_PADS[i + 1], st - i); }
+const clearNorm = (dx, dy) => Math.pow(Math.pow(Math.abs(dx), CLEAR_P) + Math.pow(Math.abs(dy), CLEAR_P), 1 / CLEAR_P);
+function clearWob(a) { return .5 * Math.sin(3 * a + 1.3) + .3 * Math.sin(5 * a + .4) + .2 * Math.sin(8 * a + 2.1); }     // -1..1
+// radius of the clearing along angle a, in the same norm; the plot corner sits at nf/2*1.1225 so the margin is never < .55*pad
+function clearRadius(a, nf) { return nf / 2 * 1.1225 + clearPad(nf - N_MIN) * (1 + .45 * clearWob(a)); }
+// signed distance (norm units ~ tiles) of a grid point outside (+) / inside (-) the clearing for land size nf centred on c
+function clearDist(x, y, nf, c) { const dx = x - c, dy = y - c; return clearNorm(dx, dy) - clearRadius(Math.atan2(dy, dx), nf); }
+const CLEAR_N = 96;
+function clearOutline(P, nf, c, off) {
+  const pts = [];
+  for (let i = 0; i < CLEAR_N; i++) {
+    const a = i / CLEAR_N * 6.2832, k = clearNorm(Math.cos(a), Math.sin(a)), r = (clearRadius(a, nf) + (off || 0)) / k;
+    pts.push(P(c + Math.cos(a) * r, c + Math.sin(a) * r));
+  }
+  return pts;
+}
+function tracePts(pts) { ctx.beginPath(); pts.forEach((p, i) => i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])); ctx.closePath(); }
+
 function drawLand(P) {
-  const {lo, hi, tw} = view, dz = tw * .2;
-  const A = P(lo, lo), B = P(hi, lo), C = P(hi, hi), D = P(lo, hi);
-  const grow = clamp(hi - lo - N_MIN, 0, 4), ex = .45 + grow * .14;      // the grassy clearing around the plot widens with every expansion
-  poly(ctx, [P(lo - ex * 1.9, lo - ex * 1.9), P(hi + ex * 1.9, lo - ex * 1.9), P(hi + ex * 1.9, hi + ex * 1.9), P(lo - ex * 1.9, hi + ex * 1.9)], 'rgba(205,234,140,.22)');
-  poly(ctx, [P(lo - ex, lo - ex), P(hi + ex, lo - ex), P(hi + ex, hi + ex), P(lo - ex, hi + ex)], 'rgba(200,232,130,.5)');
-  poly(ctx, [P(lo - ex * .5, lo - ex * .5), P(hi + ex * .5, lo - ex * .5), P(hi + ex * .5, hi + ex * .5), P(lo - ex * .5, hi + ex * .5)], 'rgba(190,226,120,.7)');
-  // soft drop shadow under the plot
-  poly(ctx, [[D[0], D[1] + dz], [C[0], C[1] + dz], [B[0], B[1] + dz], [C[0], C[1] + dz * 2.6]], 'rgba(40,70,25,.25)');
-  // earth faces
-  let g = ctx.createLinearGradient(0, D[1], 0, D[1] + dz + tw * .2);
-  g.addColorStop(0, '#b98853'); g.addColorStop(1, '#7c5230');
-  poly(ctx, [D, C, [C[0], C[1] + dz], [D[0], D[1] + dz]], g);
-  g = ctx.createLinearGradient(0, B[1], 0, B[1] + dz + tw * .2);
-  g.addColorStop(0, '#9a6b3e'); g.addColorStop(1, '#684426');
-  poly(ctx, [C, B, [B[0], B[1] + dz], [C[0], C[1] + dz]], g);
-  const rr = rng(8);
-  for (let i = 0; i < (hi - lo) * 5; i++) {   // pebbles in the earth bank
-    const f = rr(), onLeft = rr() < .5;
-    const a = onLeft ? D : C, b = onLeft ? C : B, x = lerp(a[0], b[0], f), y = lerp(a[1], b[1], f) + dz * (.25 + rr() * .55);
-    ctx.fillStyle = rr() < .5 ? 'rgba(220,190,140,.55)' : 'rgba(80,50,25,.4)';
-    ctx.beginPath(); ctx.ellipse(x, y, tw * .04, tw * .025, 0, 0, 6.2832); ctx.fill();
-  }
-  // lawn top
-  g = ctx.createLinearGradient(A[0], A[1], C[0], C[1]);
-  g.addColorStop(0, '#b3e174'); g.addColorStop(.55, '#97d066'); g.addColorStop(1, '#85c458');
-  poly(ctx, [A, B, C, D], g, '#d2ee98', 2);
-  // dappled sunlight and cool soft shade (organic variation, deliberately not a grid)
-  ctx.save();
-  ctx.beginPath(); ctx.moveTo(A[0], A[1]); ctx.lineTo(B[0], B[1]); ctx.lineTo(C[0], C[1]); ctx.lineTo(D[0], D[1]); ctx.closePath(); ctx.clip();
+  const tw = view.tw, nf = view.hi - view.lo, c = view.c;
+  // soft shade where the canopy overhangs the opening, then feathered grass so the edge melts into the forest floor
+  [[.95, .08], [.6, .09], [.3, .1]].forEach(([off, a]) => { tracePts(clearOutline(P, nf, c, off)); ctx.fillStyle = `rgba(32,82,36,${a})`; ctx.fill(); });
+  [[.34, .2], [.24, .2], [.15, .22], [.07, .25]].forEach(([off, a]) => { tracePts(clearOutline(P, nf, c, off)); ctx.fillStyle = `rgba(150,206,96,${a})`; ctx.fill(); });
+  const ring = clearOutline(P, nf, c, 0);
+  let y0 = 1e9, y1 = -1e9; ring.forEach(p => { if (p[1] < y0) y0 = p[1]; if (p[1] > y1) y1 = p[1]; });
+  const g = ctx.createLinearGradient(0, y0, 0, y1);
+  g.addColorStop(0, '#a6da6a'); g.addColorStop(.5, '#9bd366'); g.addColorStop(1, '#88c65a');
+  tracePts(ring); ctx.fillStyle = g; ctx.fill();
+  ctx.save(); tracePts(ring); ctx.clip();
+  // warm sunlight pooling in the middle, dappled light and cool soft shade (organic variation, deliberately not a grid)
+  const span = nf / 2 + clearPad(nf - N_MIN), mc = P(c, c), rad = tw * span * .75;
+  ctx.save(); ctx.translate(mc[0], mc[1]); ctx.scale(1, .5);
+  const sg = ctx.createRadialGradient(0, 0, 0, 0, 0, rad); sg.addColorStop(0, 'rgba(246,255,184,.42)'); sg.addColorStop(1, 'rgba(246,255,184,0)');
+  ctx.fillStyle = sg; ctx.fillRect(-rad, -rad, rad * 2, rad * 2); ctx.restore();
   const dr = rng(14);
-  for (let i = 0; i < 9; i++) {
-    const p = P(lo + dr() * (hi - lo), lo + dr() * (hi - lo)), rad = tw * (.7 + dr() * .9), warm = i % 3 !== 2;
+  for (let i = 0; i < 16; i++) {
+    const a = dr() * 6.2832, d = Math.sqrt(dr()) * span * .9, p = P(c + Math.cos(a) * d, c + Math.sin(a) * d), r2 = tw * (.7 + dr() * 1.1), warm = i % 3 !== 2;
     ctx.save(); ctx.translate(p[0], p[1]); ctx.scale(1, .5);
-    const rg = ctx.createRadialGradient(0, 0, 0, 0, 0, rad);
-    rg.addColorStop(0, warm ? 'rgba(240,252,170,.26)' : 'rgba(70,140,90,.12)'); rg.addColorStop(1, 'rgba(240,252,170,0)');
-    ctx.fillStyle = rg; ctx.fillRect(-rad, -rad, rad * 2, rad * 2); ctx.restore();
+    const rg = ctx.createRadialGradient(0, 0, 0, 0, 0, r2);
+    rg.addColorStop(0, warm ? 'rgba(240,252,170,.26)' : 'rgba(70,140,90,.13)'); rg.addColorStop(1, 'rgba(240,252,170,0)');
+    ctx.fillStyle = rg; ctx.fillRect(-r2, -r2, r2 * 2, r2 * 2); ctx.restore();
   }
-  ctx.restore();
-  // grass lip with a scalloped, leafy overhang
-  ctx.strokeStyle = '#6aa844'; ctx.lineWidth = Math.max(2, tw * .045); ctx.lineJoin = 'round';
-  ctx.beginPath(); ctx.moveTo(D[0], D[1]); ctx.lineTo(C[0], C[1]); ctx.lineTo(B[0], B[1]); ctx.stroke();
-  const lr = rng(21), nl = (hi - lo) * 7;
-  for (let i = 0; i <= nl; i++) {
-    const f = i / nl;
-    [[D, C], [C, B]].forEach(([a, b]) => { circle(ctx, lerp(a[0], b[0], f), lerp(a[1], b[1], f) + tw * .012, tw * (.032 + lr() * .02), lr() < .5 ? '#7dbb52' : '#8fcc5e'); });
-  }
-  // grass tufts and flowers (organic, not a grid)
+  // grass tufts and flowers across the whole meadow
+  ctx.lineWidth = Math.max(1, tw * .014); ctx.strokeStyle = '#5f9d3d';
   tufts.forEach(t => {
-    if (t.x + .5 < lo || t.x + .5 > hi || t.y + .5 < lo || t.y + .5 > hi) return;
+    if (clearDist(t.x + .5, t.y + .5, nf, c) > -.25) return;
     t.list.forEach(o => {
       const p = P(t.x + o.dx, t.y + o.dy), s = tw * .07;
+      if (p[0] < -20 || p[0] > W + 20 || p[1] < -20 || p[1] > H + 20) return;
       if (o.f) { circle(ctx, p[0], p[1] - s, s * .55, o.f); circle(ctx, p[0], p[1] - s, s * .2, '#e6a53c'); }
-      ctx.strokeStyle = '#5f9d3d'; ctx.lineWidth = Math.max(1, tw * .014);
       ctx.beginPath(); ctx.moveTo(p[0] - s * .6, p[1]); ctx.lineTo(p[0] - s * .9, p[1] - s * 1.3); ctx.moveTo(p[0], p[1]); ctx.lineTo(p[0], p[1] - s * 1.6); ctx.moveTo(p[0] + s * .6, p[1]); ctx.lineTo(p[0] + s * 1.0, p[1] - s * 1.2); ctx.stroke();
     });
   });
-}
-function drawFences(P) {
-  const {lo, hi, tw} = view, f = tw * .22;
-  ctx.lineCap = 'butt';
-  const edge = (fn) => {
-    const pts = [];
-    for (let k = 0; lo + k <= hi + .001; k++) pts.push(lo + k);
-    // ground shadow (light comes from the right)
-    ctx.strokeStyle = 'rgba(40,70,25,.22)'; ctx.lineWidth = Math.max(2, tw * .06); ctx.lineCap = 'round';
-    ctx.beginPath(); pts.forEach((v, i) => { const p = fn(v, 0); i ? ctx.lineTo(p[0] - tw * .06, p[1] + 1) : ctx.moveTo(p[0] - tw * .06, p[1] + 1); }); ctx.stroke();
-    ctx.lineCap = 'butt';
-    // rails
-    [.34, .72].forEach(h => {
-      ctx.strokeStyle = '#8a5e36'; ctx.lineWidth = Math.max(2, tw * .035); ctx.beginPath(); pts.forEach((v, i) => { const p = fn(v, f * h); i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]); }); ctx.stroke();
-      ctx.strokeStyle = '#d9a566'; ctx.lineWidth = Math.max(1, tw * .016); ctx.beginPath(); pts.forEach((v, i) => { const p = fn(v, f * h + tw * .008); i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]); }); ctx.stroke();
-    });
-    // pointed pickets between the posts
-    const pw = Math.max(1.6, tw * .026);
-    for (let k = 0; k < pts.length - 1; k++) for (let j = 1; j < 4; j++) {
-      const v = pts[k] + j / 4, b = fn(v, 0), t = fn(v, f * .9);
-      ctx.fillStyle = '#c28c55'; ctx.fillRect(b[0] - pw, t[1], pw * 2, b[1] - t[1]);
-      ctx.fillStyle = '#e8bd80'; ctx.fillRect(b[0] - pw, t[1], pw * .9, b[1] - t[1]);
-      poly(ctx, [[t[0] - pw, t[1]], [t[0] + pw, t[1]], [t[0], t[1] - pw * 1.8]], '#d9a566');
+  ctx.restore();
+  // leafy, scalloped lip along the outline with a few blades and tiny flowers reaching over the forest floor
+  const lr = rng(21);
+  ring.forEach((p, i) => {
+    const q = ring[(i + 1) % ring.length], r2 = tw * (.05 + lr() * .035);
+    circle(ctx, p[0], p[1] + tw * .012, r2, lr() < .5 ? '#79b84f' : '#8fcc5e');
+    if (i % 3 === 0) {
+      ctx.strokeStyle = '#68ab43'; ctx.lineWidth = Math.max(1, tw * .016);
+      const nx = p[1] - q[1], ny = q[0] - p[0], nl = Math.hypot(nx, ny) || 1, sx = nx / nl * tw * .09, sy = ny / nl * tw * .06;
+      ctx.beginPath(); ctx.moveTo(p[0], p[1]); ctx.lineTo(p[0] + sx * .6 - 2, p[1] + sy - tw * .06); ctx.moveTo(p[0], p[1]); ctx.lineTo(p[0] + sx + 2, p[1] + sy - tw * .04); ctx.stroke();
     }
-    // posts with caps
-    pts.forEach(v => {
-      const b = fn(v, 0), t = fn(v, f * 1.12), pw2 = Math.max(2.4, tw * .04);
-      ctx.fillStyle = '#7a4f2c'; ctx.fillRect(b[0] - pw2, t[1], pw2 * 2, b[1] - t[1]);
-      ctx.fillStyle = '#c28c55'; ctx.fillRect(b[0] - pw2, t[1], pw2 * .9, b[1] - t[1]);
-      poly(ctx, [[t[0] - pw2 * 1.2, t[1]], [t[0] + pw2 * 1.2, t[1]], [t[0], t[1] - pw2 * 1.6]], '#e8bd80', '#7a4f2c', .8);
-    });
-    ctx.lineCap = 'round';
-  };
-  edge((v, z) => P(lo, v, z));     // back-left edge
-  edge((v, z) => P(v, lo, z));     // back-right edge
+    if (i % 11 === 5) { circle(ctx, p[0], p[1] - tw * .03, tw * .028, ['#fff6b0', '#ffc2d4', '#ffffff'][i % 3]); circle(ctx, p[0], p[1] - tw * .03, tw * .01, '#e6a53c'); }
+  });
+}
+function drawStump(c, x, y, s) {
+  c.fillStyle = 'rgba(30,70,30,.22)'; c.beginPath(); c.ellipse(x - s * .06, y + s * .02, s * .4, s * .12, 0, 0, 6.2832); c.fill();
+  poly(c, [[x - s * .26, y], [x - s * .22, y - s * .26], [x + s * .22, y - s * .26], [x + s * .28, y]], '#8a5a33');
+  poly(c, [[x + s * .02, y - s * .26], [x + s * .22, y - s * .26], [x + s * .28, y], [x + s * .06, y]], '#6e4727');
+  c.fillStyle = '#e2b77e'; c.beginPath(); c.ellipse(x, y - s * .26, s * .22, s * .08, 0, 0, 6.2832); c.fill();
+  c.strokeStyle = 'rgba(140,90,45,.7)'; c.lineWidth = Math.max(1, s * .02);
+  c.beginPath(); c.ellipse(x, y - s * .26, s * .14, s * .05, 0, 0, 6.2832); c.ellipse(x, y - s * .26, s * .06, s * .022, 0, 0, 6.2832); c.stroke();
+  circle(c, x - s * .2, y - s * .04, s * .06, '#7fb85a'); circle(c, x + s * .26, y - s * .02, s * .045, '#93c96a');
 }
 
 /* ======================================================================
@@ -930,7 +924,7 @@ function hitBuilding(px, py) {
  * *visible* depends on the land size: every object has a clearing distance (in tiles from the plot edge), and
  * that distance grows with each expansion, so trees, bushes and rocks disappear ring by ring and the forest
  * edge withdraws outward: 16 -> 25 -> 36 -> 49 -> 64 tiles. */
-const WR0 = -6, WR1 = WORLD + 6;
+const WR0 = -9, WR1 = WORLD + 9;      // reaches past the widest clearing (64 tiles: ~10 tiles beyond the centre) so a forest edge always exists
 const wild = [];
 (function () {
   for (let x = WR0; x < WR1; x++) for (let y = WR0; y < WR1; y++) for (let k = 0; k < 3; k++) {
@@ -944,36 +938,38 @@ const wild = [];
     wild.push(o);
   }
 })();
-const CLEAR_BASE = {tree: .9, bush: .35, rock: .3, flower: .04}, CLEAR_STEP = {tree: .42, bush: .3, rock: .26, flower: 0};
-function wildDist(o, n) {             // ring distance (tiles) from the object to the plot of size n
-  const lo = loOf(n), hi = lo + n;
-  return Math.max(lo - o.x, o.x - hi, lo - o.y, o.y - hi, 0);
-}
+/* Visibility is decided by the clearing outline (clearDist): trees stand only beyond it, so the tree line IS the
+ * boundary of the meadow and moves outward with every expansion. Bushes and rocks may hug the edge; flowers live
+ * inside the meadow. Trees that the outline has swallowed leave a stump behind. */
+const WILD_EDGE = {tree: .15, bush: .02, rock: .02}, WILD_JIT = {tree: .55, bush: .4, rock: .4};
+function wildDist(o, n) { return clearDist(o.x, o.y, n, loOf(n) + n / 2); }
 function wildVisible(o, n) {
-  const st = stageOf(n);
-  return wildDist(o, n) >= CLEAR_BASE[o.type] + CLEAR_STEP[o.type] * st + o.jit * .35;
+  const d = wildDist(o, n);
+  return o.type === 'flower' ? d <= -.15 : d >= WILD_EDGE[o.type] + o.jit * WILD_JIT[o.type];
 }
+const isStump = (o, n) => { const d = wildDist(o, n); return o.type === 'tree' && o.jit < .45 && d <= -.3 && d >= -1.7 && wildType(o) === 'tree'; };
 /* Tall trees never stand in front of the plot (they would hide the build area); the front keeps low plants.
  * Decided in world space (against the target view) so objects do not pop while the camera is zooming. */
 function wildType(o) { return o.type === 'tree' && o.x + o.y > 2 * tgt.c + 1.4 ? (o.seed % 2 ? 'bush' : 'flower') : o.type; }
-function wildSize(type, o, tw) { return type === 'tree' ? tw * 1.05 * o.size : type === 'bush' ? tw * .7 * o.size : type === 'rock' ? tw * .55 * o.size : tw * .8; }
+function wildSize(type, o, tw) { return type === 'tree' ? tw * 1.05 * o.size : type === 'bush' ? tw * .7 * o.size : type === 'rock' ? tw * .55 * o.size : type === 'stump' ? tw * .5 * o.size : tw * .8; }
 function wildBox(type, p, s) {
   return type === 'tree' ? rectPts(p[0], p[1], s * .46, s * .98, s * .04) : type === 'bush' ? rectPts(p[0], p[1], s * .5, s * .72, s * .02)
-    : type === 'rock' ? rectPts(p[0], p[1], s * .38, s * .4, s * .02) : rectPts(p[0], p[1], s * .45, s * .28, s * .05);
+    : type === 'rock' ? rectPts(p[0], p[1], s * .38, s * .4, s * .02) : type === 'stump' ? rectPts(p[0], p[1], s * .32, s * .4, s * .04) : rectPts(p[0], p[1], s * .45, s * .28, s * .05);
 }
 /* Everything that decides whether a scenery object is actually painted for land size n in the given view. */
 function wildInfo(o, P, tw, lp, n) {
-  if (!wildVisible(o, n)) return null;
+  const stump = !wildVisible(o, n) && isStump(o, n);
+  if (!stump && !wildVisible(o, n)) return null;
   const p = P(o.x, o.y);
   if (p[0] < -tw * 2 || p[0] > W + tw * 2 || p[1] < -tw * 2.5 || p[1] > H + tw * 3) return null;
   if (nearStream(p[0], p[1], tw * .85)) return null;
-  const type = wildType(o), s = wildSize(type, o, tw);
+  const type = stump ? 'stump' : wildType(o), s = wildSize(type, o, tw);
   if (polysOverlap(wildBox(type, p, s), lp, 0)) return null;      // its painted box may never touch the plot outline
   return {type, p, s};
 }
 function drawWildObj(c, type, o, x, y, s, alpha) {
   if (type === 'tree' || type === 'bush') drawSprite(c, type, o.kind, o.seed, x, y, s, alpha);
-  else { const pa = c.globalAlpha; c.globalAlpha = pa * (alpha == null ? 1 : alpha); if (type === 'rock') drawRock(c, x, y, s); else drawFlowerPatch(c, x, y, s, o.seed); c.globalAlpha = pa; }
+  else { const pa = c.globalAlpha; c.globalAlpha = pa * (alpha == null ? 1 : alpha); if (type === 'rock') drawRock(c, x, y, s); else if (type === 'stump') drawStump(c, x, y, s); else drawFlowerPatch(c, x, y, s, o.seed); c.globalAlpha = pa; }
 }
 /* Painter's order by footprint rectangles: A is behind B when A lies wholly to the left of B or wholly behind it.
  * A plain "x+y" sort is wrong for big buildings next to small ones; this one is a topological sort with the
@@ -997,7 +993,7 @@ function depthSort(list) {
 /* Convex outline of the plot on screen (lawn + earth bank), grown by ex tiles. Scenery whose painted
  * bounding box touches it is not drawn, so trees and bushes can never hide editable land. */
 function landPoly(P, tw, ex) {
-  const {lo, hi} = view, dz = tw * .2 + 4;
+  const {lo, hi} = view, dz = 4;      // the ground has no earth bank any more: the outline is just the logical plot
   const A = P(lo - ex, lo - ex), B = P(hi + ex, lo - ex), C = P(hi + ex, hi + ex), D = P(lo - ex, hi + ex);
   return [A, B, [B[0], B[1] + dz], [C[0], C[1] + dz], [D[0], D[1] + dz], D];
 }
@@ -1026,11 +1022,10 @@ function draw() {
   } else ctx.drawImage(bg.far, 0, 0, W, H);
   const P = curP(), tw = view.tw, uz = tw * .55;
 
+  drawLand(P);                         // the meadow first, so the stream and road cross it instead of being painted over
   drawWater(P);
   drawPath(P);
-  drawLand(P);
   drawExpandGlow(P);
-  drawFences(P);
   drawOverlays(P);
 
   // depth-sorted entities (forest objects are points, buildings are footprint rectangles)
@@ -1040,7 +1035,7 @@ function draw() {
   wild.forEach(o => {
     const info = wildInfo(o, P, tw, lp, S.n);
     if (!info) return;
-    const {type, p, s} = info, mark = clearing && !wildVisible(o, S.n + 1);
+    const {type, p, s} = info, mark = clearing && type !== 'stump' && !wildVisible(o, S.n + 1);
     ents.push({k: o.x + o.y, x0: o.x, x1: o.x, y0: o.y, y1: o.y, f: () => {
       if (mark) {                      // trees that the next expansion will clear glow gold
         const pu = .5 + .5 * Math.sin(T * 4);
@@ -1055,7 +1050,10 @@ function draw() {
     if (k >= 1) return;
     const p = P(g.o.x, g.o.y), s = wildSize(g.type, g.o, tw);
     ents.push({k: g.o.x + g.o.y, x0: g.o.x, x1: g.o.x, y0: g.o.y, y1: g.o.y, f: () => {
-      drawWildObj(ctx, g.type, g.o, p[0], p[1] + k * s * .06, s * (1 - k * .55), (1 - k) * (1 - k));
+      ctx.save(); ctx.translate(p[0], p[1]);
+      if (!reduced) ctx.rotate(Math.sin(k * 11 + g.o.seed) * .14 * (1 - k));       // sways, then shrinks and dissolves
+      drawWildObj(ctx, g.type, g.o, 0, k * s * .06, s * (1 - k * .55), (1 - k) * (1 - k));
+      ctx.restore();
       circle(ctx, p[0] - s * .2 * k, p[1] - s * .2 - k * s * .3, s * (.14 + k * .2), `rgba(255,252,225,${.5 * (1 - k)})`);
       circle(ctx, p[0] + s * .22 * k, p[1] - s * .12 - k * s * .2, s * (.1 + k * .18), `rgba(235,248,190,${.45 * (1 - k)})`);
     }});
@@ -1096,10 +1094,20 @@ function drawExpandGlow(P) {
   if (!fx) return;
   const el = (performance.now() - fx.t0) / 1000, dur = reduced ? .6 : 1.2;
   if (el > fx.span + dur) { fx = null; return; }
+  {   // a soft wave of light runs outward through the new meadow (no tile squares are flashed)
+    const k = clamp(el / (dur + fx.span), 0, 1), a = 1 - k, nf = view.hi - view.lo, c = view.c;
+    const r0 = fx.r0 * view.tw, r1 = Math.max(r0 + 1, (nf / 2 + clearPad(nf - N_MIN)) * view.tw), R = lerp(r0, r1, 1 - (1 - k) * (1 - k)), mc = P(c, c);
+    if (a > 0) {
+      ctx.save(); tracePts(clearOutline(P, nf, c, 0)); ctx.clip();
+      ctx.translate(mc[0], mc[1]); ctx.scale(1, .5);
+      const rr = R * .75, wg = ctx.createRadialGradient(0, 0, Math.max(0, rr - view.tw * 2.2), 0, 0, rr + view.tw * .6);
+      wg.addColorStop(0, 'rgba(255,250,190,0)'); wg.addColorStop(.7, `rgba(255,250,190,${.5 * a})`); wg.addColorStop(1, 'rgba(255,250,190,0)');
+      ctx.fillStyle = wg; ctx.fillRect(-rr * 2, -rr * 2, rr * 4, rr * 4); ctx.restore();
+    }
+  }
   fx.tiles.forEach(t => {
     const k = clamp((el - (reduced ? 0 : t.delay)) / dur, 0, 1), a = 1 - k;
     if (a <= 0) return;
-    poly(ctx, [P(t.x, t.y), P(t.x + 1, t.y), P(t.x + 1, t.y + 1), P(t.x, t.y + 1)], `rgba(255,246,160,${.62 * a * a})`);
     if (!reduced && k > 0 && k < .95) {
       const c = P(t.x + t.sx, t.y + t.sy), r = view.tw * (.05 + .06 * Math.sin(k * 3.1416));
       ctx.fillStyle = `rgba(255,255,235,${.9 * a})`; star(ctx, c[0], c[1] - view.tw * .05, r * 1.6);
@@ -1191,19 +1199,22 @@ function label(text, x, y) {
 /* Foreground dressing lives only in the two bottom corners, outside the plot outline and low to the ground,
  * so the centre and front of the editable land (and every tap target) stays completely clear. */
 const fg = (() => { const r = rng(2024), a = []; for (let i = 0; i < 14; i++) a.push({fx: r(), dy: r(), t: r() < .35 ? 'bush' : 'flower', seed: i * 13, k: r() < .5 ? 1 : 4}); return a; })();
-const FG_STRIP = .15;                    // foreground may only live in the outer 15% of each side
+/* The foreground only frames the picture: low plants in thin side strips that narrow and thin out as the meadow opens
+ * up. The whole centre (the interaction zone) and everything inside the plot outline stay free, and nothing here is
+ * tall enough to read as a wall of trees. */
 function drawForeground(P) {
   const tw = view.tw, grow = clamp(view.hi - view.lo - N_MIN, 0, 4), lp = landPoly(P, tw, .5);
   const top = view.cy + tw * .6, span = area.bottom - 12 - top;
   if (span < 10) return;
-  const keep = Math.round(14 - grow * 2.5);     // fewer foreground plants as the land opens up
+  const strip = .15 - grow * .025;               // 15% of each side at 16 tiles, 5% at 64
+  const keep = Math.round(12 - grow * 2.5);      // fewer foreground plants as the land opens up
   fg.forEach((f, i) => {
     if (i >= keep) return;
     const left = f.fx < .5, u = (left ? f.fx : f.fx - .5) * 2;
-    const x = left ? u * W * FG_STRIP : W - u * W * FG_STRIP, y = top + f.dy * span;
+    const x = left ? u * W * strip : W - u * W * strip, y = top + f.dy * span;
     const s = f.t === 'bush' ? Math.min(tw * .5, 34) : Math.min(tw * .7, 44);
     // the centre interaction zone (everything between the two side strips) and the plot outline stay free
-    if (x > W * FG_STRIP && x < W * (1 - FG_STRIP)) return;
+    if (x > W * strip && x < W * (1 - strip)) return;
     if (nearStream(x, y, tw * .8) || polysOverlap(rectPts(x, y, s * .9, s * .8, s * .05), lp, 0)) return;
     if (f.t === 'bush') drawSprite(ctx, 'bush', f.k, f.seed, x, y, s, .92); else drawFlowerPatch(ctx, x, y, s, f.seed);
   });
@@ -1259,6 +1270,7 @@ function setHint(t, autoClear) {
   layout();
 }
 function toast(msg, undo) {
+  if (!$('modal').hidden) return;                    // a dialog is open: no second message on top of it
   $('toastText').textContent = msg;
   const ub = $('toastUndo'); undoFn = undo || null; ub.hidden = !undo;
   $('toast').hidden = false;
@@ -1286,6 +1298,7 @@ function openSheet(title, render) {
 }
 function closeSheet() { sheet.classList.remove('open'); layout(); }
 function showAction(text, okLabel, okEnabled) {
+  $('toast').hidden = true;                          // the placement bar (valid or invalid explanation) is the one active message
   actionbar.hidden = false; $('actionText').textContent = text; $('actionOk').textContent = okLabel; $('actionOk').disabled = !okEnabled; layout();
 }
 function hideAction() { actionbar.hidden = true; actionbar.classList.remove('lifted'); layout(); }
@@ -1403,7 +1416,7 @@ function doExpand() {
   if (S.points < cost) { toast('開拓点が足りないよ'); return; }
   // 1) what is painted right now and will be cleared by the new size (measured in the current view)
   const oldN = S.n, newN = oldN + 1, P0 = curP(), tw0 = view.tw, lp0 = landPoly(P0, tw0, .25), now = performance.now();
-  const cleared = wild.map(o => ({o, info: wildInfo(o, P0, tw0, lp0, oldN)})).filter(q => q.info && !wildVisible(q.o, newN));
+  const cleared = wild.map(o => ({o, info: wildInfo(o, P0, tw0, lp0, oldN)})).filter(q => q.info && q.info.type !== 'stump' && !wildVisible(q.o, newN));
   // 2) the land itself grows; the camera eases out to fit it
   S.points -= cost; S.n = newN;
   updateHUD(); layout();
@@ -1413,7 +1426,7 @@ function doExpand() {
     if (x >= loOf(oldN) && x < loOf(oldN) + oldN && y >= loOf(oldN) && y < loOf(oldN) + oldN) continue;
     tiles.push({x, y, delay: Math.hypot(x + .5 - c, y + .5 - c) * .09, sx: .3 + ((x * 7 + y * 3) % 5) * .1, sy: .3 + ((x * 3 + y * 7) % 5) * .1});
   }
-  fx = {t0: now, tiles, span: tiles.reduce((m, t) => Math.max(m, t.delay), 0)};
+  fx = {t0: now, tiles, span: tiles.reduce((m, t) => Math.max(m, t.delay), 0), r0: oldN / 2 + clearPad(oldN - N_MIN) * .6};
   fxGhosts.length = 0;
   cleared.forEach(q => fxGhosts.push({o: q.o, type: q.info.type, t0: now}));
   if (!reduced) cleared.slice(0, 40).forEach(q => spawnSparks(q.info.p[0], q.info.p[1] - q.info.s * .35, 2, ['#bfe58a', '#fffbd0', '#8fc96a']));
@@ -1481,7 +1494,8 @@ function askStore(b) {
   const it = ITEMS[b.type];
   $('modalTitle').textContent = it.name + 'をしまう？';
   $('modalText').textContent = '建物はなくなりません。「建てる」の中に保管されて、材料なしでまた置けます。';
-  $('toast').hidden = true; chips.hidden = true;                 // nothing else competes with the confirmation dialog
+  // exactly ONE dialog at a time: the build shop, placement bar, toast, hint and selection chips all step aside
+  closeSheet(); hideAction(); setHint(''); $('toast').hidden = true; chips.hidden = true;
   $('modal').hidden = false; $('modal').dataset.id = b.id; $('modalOk').focus();
 }
 function doStore(id) {
@@ -1639,5 +1653,5 @@ setHint('建物を長押しすると、もちあげて動かせるよ', 7000);
 requestAnimationFrame(frame);
 
 // Small read-only-ish hook so automated checks can exercise the rules (in-memory only).
-window.KVDemo = {S, ui, ITEMS, canPlace, visualConflict, silhouette, beginLift, enterMode, onTap, study: k => study(k, document.body), doExpand, tileCenter: (x, y) => curP()(x + .5, y + .5), setGhost, confirmAction, doStore, snap: () => { snapView(); }};
+window.KVDemo = {S, ui, ITEMS, canPlace, visualConflict, silhouette, beginLift, enterMode, onTap, study: k => study(k, document.body), doExpand, tileCenter: (x, y) => curP()(x + .5, y + .5), setGhost, confirmAction, doStore, askStore, wild, wildVisible, clearDist, snap: () => { snapView(); }};
 })();
