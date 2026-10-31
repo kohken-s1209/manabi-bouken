@@ -48,7 +48,7 @@ jobs:
           done
           node --check storybook-demo/app.js
           mkdir -p kv-v3-artifact
-          cp storybook-demo/{index.html,style.css,app.js,README.md} kv-v2-artifact/
+          cp storybook-demo/{index.html,style.css,app.js,README.md} kv-v3-artifact/
       - uses: actions/upload-artifact@v4
         with:
           name: kv-storybook-v3-candidate
