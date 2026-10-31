@@ -11,6 +11,31 @@ Files: `index.html`, `style.css`, `app.js` (plus this README). `IMPLEMENTATION_B
 - Rewards (v8) come only from correctly answered questions — see the v8 section. The old "press a button, get resources" study buttons are gone.
 - Nothing outside `storybook-demo/` was touched.
 
+## v9 changes (from `V9_FEEDBACK.md`) — grade-2 multiplication track + mastery model
+**Verification status — read first:** written and re-read by hand only. In this sandbox `node` (even `node --check`) and any browser **required approval that was not granted**, so **nothing was executed**: no syntax check, no self-test run, nothing seen on a phone. Run the checks below before relying on it. No claim is made about the school's actual pace, 大日本図書 materials or curriculum alignment beyond "original grade-2-level problems"; no textbook text or diagrams were reproduced.
+
+**Scope note:** the task text also asked for overlap/footprint rework, long-press selection with cancel, foreground vegetation and graphics changes. `V9_FEEDBACK.md` lists none of them (and says existing village, buildings, bridge, river, forest cache stay intact), so they were **not changed**; they exist since v2–v6 (tile-footprint → bounding-box → silhouette collision with depth order, long-press lift → destination tap → cancel, side-strip-only low foreground plants with a free centre). No claim is made that any art matches a raster screenshot.
+
+### What changed (only `index.html` cache-bust strings, `style.css`, `app.js`, this README)
+- **Multiplication track — 42 original generators** (`KVLearn.MULT_TEMPLATES`, kept apart from the 28 v8 add/subtract templates): (a) `groups` — equal groups / repeated addition (5); (b) `expr` — multiplication symbol, story ⇄ expression (4); (c) times tables — 3 generators for each of 2, 5, 3, 4, 6, 7, 8, 9, 1 (symbol, story, missing number; 27); (d) `mword` — fantasy-village word problems incl. two-step add / subtract and "which problem is multiplication / which expression" choices (6). Products are ≤ 81; early stages use factors 2–5. Order convention **「1つ分の数 × いくつ分」** (3こずつ 4さら = 3 × 4); the swapped expression is never offered as a wrong choice. Wrong numeric choices are typical slips (added instead of multiplied, one group too many/few, off by one). Equal groups are drawn with plain DOM dots (`.q-groups`), no canvas.
+- **Mastery model per topic** (add vs subtract word-problem types, groups, expression, each table, multiplication word problems): progress = (first-try-no-hint correct + ½ other correct) / 5, scaled by accuracy; errors and hints are counted; `last` day per topic drives spaced review (3 days, 7 once mastered ≥ 80 %). Stage unlocking is rule-based: a topic opens when the parent's unit reaches it **or** its single prerequisite reaches ≥ 40 % (groups → expr → 2 / 5 / word problems; 2 → 3, 1; 5 → 4; 3 → 6; 4 → 7; 6 → 8; 7 → 9). Add/subtract is always open, so the child is never locked out.
+- **Question mix:** ~60 % current unit, ~30 % weak/due review (falls back to earlier unfinished topics, then current), ~10 % ahead (next unit, only when its prerequisite is really met; an empty pool falls back to the current unit). "ふくしゅう多め" mode = 40 / 55 / 5. Never repeats the last template back-to-back when avoidable; picks weaker topics more often.
+- **Parent section** (inside the closed "おうちの方へ" panel, behind a small arithmetic check, cleared when the sheet reopens): school unit (addsub / かけ算のはじまり [default] / 2・5のだん / ほかのだん / かけ算の文章題), mode (ふつう / すこし先へ / ふくしゅう多め), a next-up preview worded as a rough 2–4 week suggestion, **not** a school schedule, and per-topic progress bars. Settings live in `learn.settings` inside the existing single key `kv-storybook-demo:v8`. Changing them never resets progress, rewards or the village. Children only see the subject choices and the next question.
+- **Rewards:** unchanged correctness economy — wrong/unsolved = 0 resources, 0 points; full for first-try without hint, 60 % with hint or one miss, 30 % after two misses. New: harder topics (tables 6–9, multiplication word problems, the two v8 "reverse" topics) solved first-try without hint earn **+3 🪵 and +2 開拓点**. New guard: every generated question id (`template:seed`, last 300 kept, survives a stats reset) rewards at most once, on top of the pending-question persistence, `paid` flag and 30/day cap.
+- **Migration:** v8 saves load unchanged (`learn.v` 1 → 2 in memory): solved counts, per-topic counts, daily guard, pending questions are kept; new fields (`err`, `last`, `settings`, `seen`) default to zero/empty and are validated/clamped; **no counts are moved to multiplication topics and the village is untouched**. Storage key and save version are unchanged.
+- No new frame loops, no canvas or ground-layer change, no network, no dependencies.
+
+### v9 checks (not yet run — please run)
+```
+node --check storybook-demo/app.js
+node -e "const K=require('./storybook-demo/app.js');const f=K.selfTest();console.log('mult templates',K.MULT_TEMPLATES.length,'failures',f.length,f.slice(0,10))"
+```
+`selfTest()` covers: 300 seeds × every multiplication generator (answer correctness, 4 unique choices with exactly one correct, ranges, no swapped-order distractor, no `undefined`/`NaN`), reward guards (first try, double answer, retry/hint reduction, wrong-only = no reward, same question id pays once, daily cap, reset keeps guards), v8 and garbage migration, selection (no tables before groups/expression progress; 2/5 appear after; 6–9 stay closed; every unit × mode builds valid questions). Expected: `failures 0`. If something fails it prints the message with the generator id and seed.
+Manual: 学ぶ → 算数 shows dots for equal-group questions; "おうちの方へ" → bars for every topic, answer the check, change unit/mode, reload (kept); 360 px wide: dot rows wrap, choices stay ≥ 56 px.
+
+### Limitations
+Unrun code (see above). The unit order and the 40 %/80 % thresholds are my rule-of-thumb, not a validated mastery measure. The parent gate is a convenience, not security. Only `groups`/`expr`/early table items draw dots; items over 30 dots or word problems show text only. Japanese/English item sets are unchanged.
+
 ## v8 changes (from `V8_FEEDBACK.md`) — a real learning loop
 **Verification status — read first:** written and re-read by hand only. In this sandbox `node` and a browser were **not approved / not available**, so **none of the code or the tests below has been executed** and nothing has been seen on a phone or tablet. Run the checks in "Desktop checks" before relying on it. Nothing here claims curriculum alignment, adaptive difficulty, parent-dashboard sync or a validated mastery measure.
 
@@ -37,7 +62,7 @@ let bad=[];for(const t of K.MATH_TEMPLATES)for(let s=1;s<=2000;s++){const q=K.ma
  for(const s of ['japanese','english']){const it=s==='japanese'?K.JA_ITEMS:K.EN_ITEMS;console.log(s,it.length,it.every(i=>i.choices.includes(i.answer)&&new Set(i.choices).size===i.choices.length))}
  // reward guards
  let L=K.newState(),D='2026-01-01',p=K.next(L,'math',D,5),q=K.build(p);
- let r=K.answer(L,'math',q.answer,D);console.log('first try full',r.correct&&r.level===0&&r.reward.gain.wood===12);
+ let r=K.answer(L,'math',q.answer,D);console.log('first try full',r.correct&&r.level===0&&r.reward.gain.wood>=12);
  console.log('double answer ignored',!!K.answer(L,'math',q.answer,D).ignored,'claim once',K.claim(L).length===1&&K.claim(L).length===0);
  L=K.newState();p=K.next(L,'math',D,6);q=K.build(p);const w=q.choices.find(c=>c!==q.answer);
  K.answer(L,'math',w,D);console.log('repeat wrong ignored',!!K.answer(L,'math',w,D).ignored);

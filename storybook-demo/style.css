@@ -137,6 +137,22 @@ button:focus-visible{outline:3px solid #2b7bd0;outline-offset:2px}
 .parent-btns{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}
 .parent-btns button{min-height:44px;padding:0 12px;border-radius:12px;border:2px solid var(--edge);background:#fff;font-weight:800;font-size:13px;color:var(--ink)}
 .parent-btns .warn{border-color:#d9663f;color:#b8431f}
+/* v9: equal-groups picture (plain DOM), parent mastery bars and school-unit settings */
+.q-groups{display:flex;flex-wrap:wrap;justify-content:center;gap:6px 8px;padding:4px 2px}
+.q-groups .grp{display:inline-flex;flex-wrap:wrap;justify-content:center;align-content:center;gap:3px;min-width:34px;max-width:78px;padding:5px;border-radius:14px;background:#fff6d6;border:2px solid #e8cf86}
+.q-groups .dot{display:block;width:12px;height:12px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#ff9a85,#d9482f);box-shadow:0 1px 0 #a53a25}
+.mast{margin:4px 0 8px}
+.mast-unit{font-size:12.5px;font-weight:900;color:var(--ink2);margin:6px 0 2px}
+.mast-unit.now{color:var(--green-d)}
+.mast-row{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:0 8px;align-items:center;font-size:12.5px;margin:2px 0}
+.mast-row .meter{margin:3px 0}
+.mast-name{font-weight:800}
+.mast-txt{grid-column:1 / -1;font-size:11.5px;color:var(--ink2);font-weight:700;margin:-2px 0 2px}
+.psettings{border-top:2px dashed var(--edge);margin-top:8px;padding-top:2px}
+.unit-list{display:flex;flex-direction:column;gap:6px;margin:6px 0}
+.unit-btn{min-height:44px;padding:6px 12px;border-radius:12px;border:2px solid var(--edge);background:#fff;font-weight:800;font-size:13px;text-align:left;color:var(--ink)}
+.unit-btn[aria-checked="true"]{background:#effadf;border-color:#5da83c;box-shadow:0 0 0 2px #b9e48d}
+.gate-in{min-height:44px;width:84px;padding:0 8px;border-radius:12px;border:2px solid var(--edge);font:inherit;font-weight:800;color:var(--ink);background:#fff}
 .expand-info{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-weight:800;font-size:14px}
 .expand-info .ok{margin-left:auto}
 

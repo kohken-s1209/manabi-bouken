@@ -1,4 +1,4 @@
-/* Knowledge Village — storybook UI demo (v8: real learning loop).
+/* Knowledge Village — storybook UI demo (v9: grade-2 multiplication track + mastery model on top of the v8 learning loop).
  * Standalone: no network, no external libraries. Progress is saved ONLY to this demo's own namespaced localStorage key.
  * All artwork is drawn procedurally with the Canvas 2D API (original code-authored drawings).
  *
@@ -35,6 +35,23 @@ const TOPIC = {
   compare:     {label: 'ちがい',             op: '-', hint: '「ちがい」「どちらが いくつ おおい」は、おおきい数から ちいさい数を ひくよ。ならべて ○をかくと わかりやすいよ。'},
   reverseSub:  {label: 'ことばと しきがちがう（ひき）', op: '-', hint: 'ことばに だまされないで！「もらったら ○になった」は ふえたようにみえるけど、「はじめの数」を さがすときは ぜんぶの数から あとからの数を ひくよ。'},
 };
+/* v9 multiplication topics. Convention used everywhere: 「1つ分の数 × いくつ分」 (e.g. 3こずつ 4さら = 3 × 4). The swapped product is never offered as a "wrong" choice. */
+const MT = (label, hint, hard) => ({label, op: '×', hint, hard: !!hard});
+Object.assign(TOPIC, {
+  groups: MT('おなじ数ずつ・たしざん', 'おなじ数ずつの グループは、おなじ数を くりかえし たすと ぜんぶの数が わかるよ。絵や ○を かいて かぞえてみよう。'),
+  expr:   MT('かけざんの しき', 'かけざんの しきは「1つ分の数 × いくつ分」の じゅんに かくよ。おはなしの「ずつ」の 数が 1つ分だよ。'),
+  t2: MT('2のだん', '2のだんは 2ずつ ふえるよ。2, 4, 6, 8 … と となえてみよう。'),
+  t5: MT('5のだん', '5のだんは 5ずつ ふえるよ。5, 10, 15 … 一のくらいは 5と 0の くりかえしだよ。'),
+  t3: MT('3のだん', '3のだんは 3ずつ ふえるよ。3, 6, 9, 12 … と となえてみよう。'),
+  t4: MT('4のだん', '4のだんは 4ずつ ふえるよ。4, 8, 12, 16 … 2のだんを 2回 つかっても いいよ。'),
+  t6: MT('6のだん', '6のだんは 6ずつ ふえるよ。わからない ときは ひとつ まえの 答えに 6を たしてみよう。', 1),
+  t7: MT('7のだん', '7のだんは 7ずつ ふえるよ。わからない ときは ひとつ まえの 答えに 7を たしてみよう。', 1),
+  t8: MT('8のだん', '8のだんは 8ずつ ふえるよ。わからない ときは ひとつ まえの 答えに 8を たしてみよう。', 1),
+  t9: MT('9のだん', '9のだんは 9ずつ ふえるよ。わからない ときは ひとつ まえの 答えに 9を たしてみよう。', 1),
+  t1: MT('1のだん', '1のだんは 1つ分が 1だから、いくつ分でも その数と おなじだよ。'),
+  mword: MT('かけざんの 文しょうだい', 'まず「1つ分」と「いくつ分」を さがそう。おなじ数ずつなら かけざん。くっつける・のこりを しらべるなら たしざん・ひきざんだよ。', 1),
+});
+for (const k of ['reverseAdd', 'reverseSub']) TOPIC[k].hard = true;       // harder v8 topics earn the modest independent-solve bonus too
 const T = (id, topic, cap, text) => ({id, topic, op: TOPIC[topic].op, cap, text});
 const MATH_TEMPLATES = [
   // --- addition solves (14) ---
@@ -69,7 +86,90 @@ const MATH_TEMPLATES = [
   T('rs3', 'reverseSub', 60, (a, b) => `ともだちが ${b}人 きて、ぜんぶで ${a}人 に なりました。はじめは なん人 いましたか。`),
 ];
 
+/* ---------------- v9 multiplication track: 42 original generators (not in MATH_TEMPLATES, which stays the 28 v8 add/subtract templates) ----------------
+ * Every generator returns the answer plus 4 unique choices with exactly one correct. Products are at most 9 × 9 = 81 (grade-2 九九 range);
+ * the early stages use factors 2–5. Wrong numeric choices are common slips (added instead of multiplied, one group too many / few, off by one). */
+const CONT = [['おさら', 'まい', 'りんご', 'こ', 'のっています'], ['かご', 'つ', 'みかん', 'こ', 'はいっています'], ['ふくろ', 'ふくろ', 'あめ', 'こ', 'はいっています'],
+  ['はこ', 'はこ', 'クッキー', 'まい', 'はいっています'], ['くるま', 'だい', '人', '人', 'のっています'], ['ボート', 'そう', '人', '人', 'のっています']];
+const FANT = [['まほうの かご', 'つ', 'ひかる きのみ', 'こ', 'はいっています'], ['ようせいの ボート', 'そう', 'ようせい', '人', 'のっています'],
+  ['ほしの ふくろ', 'ふくろ', 'ほしの かけら', 'こ', 'はいっています'], ['ドラゴンの すだち', 'つ', 'たまご', 'こ', 'あります'],
+  ['ようせいの はたけ', 'つ', 'にんじん', 'ほん', 'はえています'], ['きこりの くるま', 'だい', 'まるた', 'ほん', 'のっています']];
+const cobj = a => ({cn: a[0], cc: a[1], it: a[2], ic: a[3], vb: a[4]});
+const storyEq = (c, a, n) => `${c.cn}が ${n}${c.cc} あります。どの ${c.cn}にも ${c.it}が ${a}${c.ic}ずつ ${c.vb}。`;
+const repAdd = (a, n) => Array(n).fill(a).join(' + ');
+function numChoices(r, ans, extra, hi) {
+  const ok = v => isInt(v) && v >= 1 && v <= (hi || 100) && v !== ans, ds = [];
+  shuffle(extra.concat([ans + 1, ans - 1, ans + 2, ans - 2, ans + 10, ans - 10, ans + 3, ans - 3, ans + 5]), r).forEach(v => { if (ok(v) && !ds.includes(v)) ds.push(v); });
+  return shuffle([ans].concat(ds.slice(0, 3)), r);
+}
+const strChoices = (r, ans, ds) => shuffle([ans].concat(shuffle(ds.filter(x => x !== ans), r).slice(0, 3)), r);
+const sm = (r, lo, hi, not) => { let v; do { v = ri(r, lo, hi); } while (v === not); return v; };
+const MU = (id, topic, gen) => ({id, topic, op: '×', mult: true, gen});
+const mulNum = (r, a, n, text, hint, explain, vis) => ({text, answer: a * n, nums: [a, n], expr: `${a} × ${n}`, groups: vis === false ? null : [a, n], hint,
+  choices: numChoices(r, a * n, [a + n, a * (n + 1), a * Math.max(1, n - 1), (a + 1) * n, Math.max(1, a - 1) * n]), explain});
+const MULT_TEMPLATES = [
+  // (a) equal groups and repeated addition
+  MU('gr1', 'groups', r => { const a = ri(r, 2, 5), n = sm(r, 2, 5, a), c = cobj(pick(r, CONT));
+    return mulNum(r, a, n, `${storyEq(c, a, n)}ぜんぶで なん${c.ic}ですか。`, TOPIC.groups.hint, `${repAdd(a, n)} = ${a * n}。${a}が ${n}つ分だから、しきは ${a} × ${n} = ${a * n}。こたえは ${a * n}${c.ic}だよ。`); }),
+  MU('gr2', 'groups', r => { const a = ri(r, 2, 5), n = sm(r, 2, 5, a);
+    return mulNum(r, a, n, `${repAdd(a, n)} は いくつですか。`, '同じ数を たしているよ。2つずつ、3つずつと じゅんに たしていこう。', `${repAdd(a, n)} = ${a * n}。${a}を ${n}かい たしたので、${a} × ${n} = ${a * n} とも かけるよ。`); }),
+  MU('gr3', 'groups', r => { const a = ri(r, 2, 5), n = sm(r, 2, 6, a), c = cobj(pick(r, CONT));
+    return {text: `${storyEq(c, a, n)}${a}${c.ic}ずつの グループは いくつ分 ありますか。`, answer: n, nums: [a, n], expr: `${a} × ${n}`, groups: [a, n], hint: '「ずつ」のまえの 数が 1つ分。その 1つ分が いくつ あるかを かぞえるよ。',
+      choices: numChoices(r, n, [a, a * n, n + 1, n - 1], 12), explain: `${a}${c.ic}ずつが ${n}つ あるので、${n}つ分。しきは ${a} × ${n} だよ。`}; }),
+  MU('gr4', 'groups', r => { const a = ri(r, 2, 5), n = ri(r, 2, 5), c = cobj(pick(r, CONT));
+    return mulNum(r, a, n + 1, `${c.cn}が ${n}${c.cc} あって、どの ${c.cn}にも ${c.it}が ${a}${c.ic}ずつ あります。${c.cn}が もう 1${c.cc} ふえて ${n + 1}${c.cc}に なると、ぜんぶで なん${c.ic}ですか。`, '1つ分は かわらないよ。いくつ分に なったかを たしかめて、かぞえなおそう。', `${a} が ${n + 1}つ分だから ${a} × ${n + 1} = ${a * (n + 1)}。こたえは ${a * (n + 1)}${c.ic}だよ。`); }),
+  MU('gr5', 'groups', r => { const a = ri(r, 2, 5), n = sm(r, 2, 5, a), pq = pick(r, CH);
+    return mulNum(r, a, n, `${pq[0]}は まいにち シールを ${a}まい ずつ はります。${n}日 つづけると、ぜんぶで なんまい はりましたか。`, '1日に はる数が 1つ分。それが なん日分 あるかな。', `1日 ${a}まいが ${n}日分だから ${a} × ${n} = ${a * n}。こたえは ${a * n}まいだよ。`); }),
+  // (b) the multiplication symbol: story <-> expression
+  MU('e1', 'expr', r => { const a = ri(r, 2, 5), n = sm(r, 2, 5, a), c = cobj(pick(r, CONT)), ans = `${a} × ${n}`;
+    return {text: `${storyEq(c, a, n)}ぜんぶの 数を もとめる しきは どれですか。`, answer: ans, nums: [a, n], expr: ans, groups: [a, n], hint: TOPIC.expr.hint,
+      choices: strChoices(r, ans, [`${a} + ${n}`, `${a} × ${n + 1}`, `${a + 1} × ${n}`, `${a} × ${n - 1}`]), explain: `「1つ分の数 × いくつ分」だから、${a}${c.ic}ずつ ${n}つ分の しきは ${ans} だよ。`}; }),
+  MU('e2', 'expr', r => { const a = ri(r, 2, 5), n = sm(r, 2, 5, a), c = cobj(pick(r, CONT.slice(0, 4))), ans = `${c.cn}が ${n}${c.cc}、1${c.cc}に ${c.it}が ${a}${c.ic}ずつ`;
+    return {text: `かけざんの しき「${a} × ${n}」に あう おはなしは どれですか。`, answer: ans, nums: [a, n], expr: `${a} × ${n}`, groups: null, hint: '「ずつ」で おなじ数が ならんでいる おはなしが かけざんだよ。あわせる・とる おはなしでは ないよ。',
+      choices: strChoices(r, ans, [`${c.it}が ${a}${c.ic} と ${n}${c.ic}、あわせて いくつ`, `${c.it}が ${a + n}${c.ic} あって、${n}${c.ic}を とる`, `${c.cn}が ${n + 1}${c.cc}、1${c.cc}に ${c.it}が ${a}${c.ic}ずつ`]),
+      explain: `${a} × ${n} は「${a}が ${n}つ分」。おなじ数ずつ ならんでいる おはなしを えらぼう。`}; }),
+  MU('e3', 'expr', r => { const a = ri(r, 2, 5), n = sm(r, 2, 5, a);
+    return mulNum(r, a, n, `${a} × ${n} は いくつですか。`, `${a} × ${n} は「${a}が ${n}つ分」という いみだよ。${a}を くりかえし たしてみよう。`, `${a} × ${n} は ${repAdd(a, n)} と おなじ。こたえは ${a * n} だよ。`); }),
+  MU('e4', 'expr', r => { const a = ri(r, 2, 5), n = sm(r, 2, 5, a), ans = `${a} × ${n}`;
+    return {text: `${repAdd(a, n)} を かけざんの しきに かくと どれですか。`, answer: ans, nums: [a, n], expr: ans, groups: [a, n], hint: '同じ数を なんかい たしているかな。たす数が 1つ分、たした かいすうが いくつ分だよ。',
+      choices: strChoices(r, ans, [`${a} + ${n}`, `${a} × ${n + 1}`, `${a + 1} × ${n}`]), explain: `${a}を ${n}かい たしているので ${a} × ${n} だよ。`}; }),
+];
+// (c) times tables: 3 generators for each of the nine tables (symbols, a story, and a missing number)
+[2, 5, 3, 4, 6, 7, 8, 9, 1].forEach(k => {
+  MULT_TEMPLATES.push(
+    MU(`t${k}a`, `t${k}`, r => { const n = ri(r, 1, 9); return mulNum(r, k, n, `${k} × ${n} = □　□に はいる 数は？`, TOPIC['t' + k].hint, `${k} × ${n} = ${k * n}。${k}のだんの うたで たしかめよう。`, k * n <= 30); }),
+    MU(`t${k}b`, `t${k}`, r => { const n = ri(r, 2, 9), c = cobj(pick(r, CONT)); return mulNum(r, k, n, `${storyEq(c, k, n)}ぜんぶで なん${c.ic}ですか。`, `1つ分は ${k}${c.ic}。${k}のだんを つかって、いくつ分か かんがえよう。`, `${k} × ${n} = ${k * n}。こたえは ${k * n}${c.ic}だよ。`, k * n <= 30); }),
+    MU(`t${k}c`, `t${k}`, r => { const n = ri(r, 1, 9), P = k * n;
+      return {text: `${k} × □ = ${P}　□に はいる 数は？`, answer: n, nums: [k, n], expr: `${k} × ${n}`, groups: null, hint: `${k}のだんを じゅんに いってみよう。${P}に なるのは なんばんめかな。`,
+        choices: numChoices(r, n, [n + 1, n - 1, k, n + 2], 12), explain: `${k} × ${n} = ${P} だから、□は ${n} だよ。`}; }));
+});
+// (d) word problems in the fantasy village (including mixed add / subtract / multiply choices)
+MULT_TEMPLATES.push(
+  MU('w1', 'mword', r => { const a = ri(r, 2, 5), n = sm(r, 2, 6, a), c = cobj(pick(r, FANT));
+    return mulNum(r, a, n, `むらの ${storyEq(c, a, n)}ぜんぶで なん${c.ic}ですか。`, TOPIC.mword.hint, `1つ分が ${a}${c.ic}で ${n}つ分。${a} × ${n} = ${a * n}。こたえは ${a * n}${c.ic}だよ。`); }),
+  MU('w2', 'mword', r => { const a = ri(r, 2, 5), n = sm(r, 2, 6, a), b = ri(r, 2, 9), c = cobj(pick(r, FANT.filter(x => x[3] !== '人'))), ans = a * n + b;
+    return {text: `${storyEq(c, a, n)}さらに ${b}${c.ic} ふえました。${c.it}は ぜんぶで なん${c.ic}ですか。`, answer: ans, nums: [a, n, b], expr: `${a} × ${n} + ${b}`, groups: null, hint: 'まず おなじ数ずつの ぶぶんを かけざんで もとめて、そのあと ふえた分を たそう。',
+      choices: numChoices(r, ans, [a * n, a * n - b, a + n + b, a * n + b + a]), explain: `${a} × ${n} = ${a * n}。そこへ ${b}を たして ${a * n} + ${b} = ${ans}。こたえは ${ans}${c.ic}だよ。`}; }),
+  MU('w3', 'mword', r => { const a = ri(r, 2, 5), n = sm(r, 2, 6, a), c = cobj(pick(r, FANT.filter(x => x[3] !== '人'))), T0 = a * n, b = ri(r, 1, T0 - 2), ans = T0 - b;
+    return {text: `${storyEq(c, a, n)}そのうち ${b}${c.ic}を つかいました。のこりは なん${c.ic}ですか。`, answer: ans, nums: [a, n, b], expr: `${a} × ${n} − ${b}`, groups: null, hint: 'まず ぜんぶの 数を かけざんで もとめて、つかった分を ひこう。',
+      choices: numChoices(r, ans, [T0, T0 + b, a + n - b > 0 ? a + n - b : T0 + 2]), explain: `${a} × ${n} = ${T0}。つかった ${b}を ひいて ${T0} − ${b} = ${ans}。こたえは ${ans}${c.ic}だよ。`}; }),
+  MU('w4', 'mword', r => { const a = ri(r, 2, 5), n = sm(r, 2, 6, a), b = ri(r, 2, 6), c = cobj(pick(r, FANT.filter(x => x[3] !== '人'))), ans = `${c.cn}が ${n}${c.cc}。どの ${c.cn}にも ${c.it}が ${a}${c.ic}ずつ。ぜんぶで いくつ？`;
+    return {text: 'つぎの うち、かけざんで とく もんだいは どれですか。', answer: ans, nums: [a, n], expr: `${a} × ${n}`, groups: null, hint: 'おなじ数ずつ いくつ分も ある ものを さがそう。あわせる・のこり・ちがいは かけざんでは ないよ。',
+      choices: strChoices(r, ans, [`${c.it}が ${a}${c.ic}、あとから ${b}${c.ic} ふえた。ぜんぶで いくつ？`, `${c.it}が ${a + b}${c.ic} あって、${b}${c.ic}を つかった。のこりは いくつ？`, `あかい ${c.it}が ${a + b}${c.ic}、しろい ${c.it}が ${a}${c.ic}。ちがいは いくつ？`]),
+      explain: `おなじ数ずつ ${n}つ分ある おはなしが かけざん（${a} × ${n}）。ほかは たしざんや ひきざんで とくよ。`}; }),
+  MU('w5', 'mword', r => { const a = ri(r, 2, 5), n = sm(r, 2, 6, a), c = cobj(pick(r, FANT)), ans = `${a} × ${n}`, hi = Math.max(a, n), lo = Math.min(a, n);
+    return {text: `${storyEq(c, a, n)}ぜんぶの 数を もとめる しきは どれですか。`, answer: ans, nums: [a, n], expr: ans, groups: null, hint: TOPIC.mword.hint,
+      choices: strChoices(r, ans, [`${a} + ${n}`, `${hi} − ${lo}`, `${a} × ${n + 1}`]), explain: `おなじ数ずつ ${n}つ分だから ${ans}。たしざん・ひきざんでは ないよ。`}; }),
+  MU('w6', 'mword', r => { const a = ri(r, 2, 5), n = sm(r, 2, 6, a);
+    return mulNum(r, a, n, `むらの おみせで あめを 1こ ${a}円で うっています。${n}こ かうと、ぜんぶで なん円ですか。`, '1こ分の ねだんが 1つ分。それが なんこ分かな。', `1こ ${a}円が ${n}こ分だから ${a} × ${n} = ${a * n}。こたえは ${a * n}円だよ。`, false); }),
+);
+
 function mathQuestion(tid, seed) {
+  const m = MULT_TEMPLATES.find(x => x.id === tid);
+  if (m) {
+    const g = m.gen(prng(seed));
+    return {subject: 'math', id: m.id, topic: m.topic, op: '×', nums: g.nums, expr: g.expr, answer: g.answer, choices: g.choices, text: g.text, visual: '', groups: g.groups || null, hint: g.hint, explain: g.explain};
+  }
   const t = MATH_TEMPLATES.find(x => x.id === tid);
   if (!t) return null;
   const r = prng(seed), o = pick(r, OBJ), pq = pick(r, CH);
@@ -126,10 +226,23 @@ function itemQuestion(subject, id, seed) {
 const build = p => p && (p.subject === 'math' ? mathQuestion(p.tid, p.seed) : itemQuestion(p.subject, p.tid, p.seed));
 
 /* ---------------- learning state ---------------- */
-const zStat = () => ({q: 0, ok: 0, first: 0, hint: 0});
+const zStat = () => ({q: 0, ok: 0, first: 0, hint: 0, err: 0});
+/* v9 school-unit setting (parent-chosen, never inferred): the order is only a rough teaching sequence, NOT a claim about any school's calendar. */
+const UNITS = [
+  {id: 'addsub',   label: 'たし算・ひき算の文しょうだい', topics: ['gather', 'increase', 'compareMore', 'reverseAdd', 'remain', 'compare', 'reverseSub']},
+  {id: 'mulIntro', label: 'かけ算のはじまり（同じ数ずつ・かけ算の しき）', topics: ['groups', 'expr']},
+  {id: 'table25',  label: '2のだん・5のだん', topics: ['t2', 't5']},
+  {id: 'tableMore', label: 'ほかのだん（3・4・6・7・8・9・1）', topics: ['t3', 't4', 't6', 't7', 't8', 't9', 't1']},
+  {id: 'mulWord',  label: 'かけ算の文しょうだい', topics: ['mword']},
+];
+const DEFAULT_UNIT = 1, SEEN_MAX = 300, GOAL = 5;
+const unitOfTopic = k => UNITS.findIndex(u => u.topics.includes(k));
+const allTemplate = id => MATH_TEMPLATES.some(t => t.id === id) || MULT_TEMPLATES.some(t => t.id === id);
+const isHard = q => !!(q && TOPIC[q.topic] && TOPIC[q.topic].hard);
 function newState() {
-  return {v: 1, solved: {math: 0, japanese: 0, english: 0}, stats: {math: zStat(), japanese: zStat(), english: zStat()}, topics: {}, recent: [],
-    daily: {date: '', math: 0, items: {japanese: [], english: []}}, pending: {}, bag: [], rot: {japanese: 0, english: 0}};
+  return {v: 2, solved: {math: 0, japanese: 0, english: 0}, stats: {math: zStat(), japanese: zStat(), english: zStat()}, topics: {}, recent: [],
+    daily: {date: '', math: 0, items: {japanese: [], english: []}}, pending: {}, bag: [], rot: {japanese: 0, english: 0},
+    settings: {unit: DEFAULT_UNIT, mode: 'normal'}, last: {}, lastTopic: '', lastTid: '', seen: []};
 }
 const nn = (v, hi) => isInt(v) && v >= 0 ? Math.min(v, hi == null ? 1e6 : hi) : 0;
 /* Safe migration: unknown / missing / damaged fields fall back to zero. Nothing is invented: older builds persisted no learning
@@ -140,17 +253,24 @@ function migrateLearn(raw) {
   SUBJECTS.forEach(s => {
     L.solved[s] = nn(raw.solved && raw.solved[s]);
     const st = raw.stats && raw.stats[s] || {};
-    L.stats[s] = {q: nn(st.q), ok: nn(st.ok), first: nn(st.first), hint: nn(st.hint)};
+    L.stats[s] = {q: nn(st.q), ok: nn(st.ok), first: nn(st.first), hint: nn(st.hint), err: nn(st.err)};
     if (L.stats[s].ok > L.stats[s].q) L.stats[s].ok = L.stats[s].q;
   });
   if (raw.topics && typeof raw.topics === 'object') Object.keys(raw.topics).forEach(k => {
-    if (!TOPIC[k]) return; const t = raw.topics[k] || {}; L.topics[k] = {q: nn(t.q), ok: nn(t.ok), first: nn(t.first), hint: nn(t.hint)};
+    if (!TOPIC[k]) return; const t = raw.topics[k] || {}; L.topics[k] = {q: nn(t.q), ok: nn(t.ok), first: nn(t.first), hint: nn(t.hint), err: nn(t.err)};
+    const x = L.topics[k]; if (x.ok > x.q) x.ok = x.q; if (x.first > x.ok) x.first = x.ok;
   });
   if (Array.isArray(raw.recent)) L.recent = raw.recent.slice(-20).filter(e => e && SUBJECTS.includes(e.s)).map(e => ({s: e.s, t: String(e.t || '').slice(0, 16), ok: !!e.ok, hint: !!e.hint, w: nn(e.w, 3), d: String(e.d || '').slice(0, 10)}));
   const d = raw.daily || {};
   L.daily = {date: typeof d.date === 'string' ? d.date.slice(0, 10) : '', math: nn(d.math, 1000), items: {japanese: [], english: []}};
   ['japanese', 'english'].forEach(s => { const a = d.items && d.items[s]; if (Array.isArray(a)) L.daily.items[s] = a.filter(x => ITEMS_OF[s].some(i => i.id === x)); });
   if (Array.isArray(raw.bag)) L.bag = raw.bag.filter(x => MATH_TEMPLATES.some(t => t.id === x));
+  const st0 = raw.settings && typeof raw.settings === 'object' ? raw.settings : {};      // v8 saves have no settings: defaults apply, no progress is touched
+  L.settings = {unit: isInt(st0.unit) && st0.unit >= 0 && st0.unit < UNITS.length ? st0.unit : DEFAULT_UNIT, mode: ['normal', 'ahead', 'reinforce'].includes(st0.mode) ? st0.mode : 'normal'};
+  if (raw.last && typeof raw.last === 'object') Object.keys(raw.last).forEach(k => { if (TOPIC[k] && /^\d{4}-\d{2}-\d{2}$/.test(String(raw.last[k]))) L.last[k] = String(raw.last[k]); });
+  if (typeof raw.lastTopic === 'string' && TOPIC[raw.lastTopic]) L.lastTopic = raw.lastTopic;
+  if (typeof raw.lastTid === 'string' && allTemplate(raw.lastTid)) L.lastTid = raw.lastTid;
+  if (Array.isArray(raw.seen)) L.seen = raw.seen.filter(x => typeof x === 'string' && x.length < 24).slice(-SEEN_MAX);
   ['japanese', 'english'].forEach(s => { L.rot[s] = nn(raw.rot && raw.rot[s], 1000); });
   if (raw.pending && typeof raw.pending === 'object') SUBJECTS.forEach(s => {
     const p = raw.pending[s];
@@ -160,7 +280,7 @@ function migrateLearn(raw) {
     const q = build(np);
     if (!q) return;
     np.wrong = np.wrong.filter(v => q.choices.includes(v));
-    if (np.rewarded && p.reward && typeof p.reward === 'object') np.reward = rewardFor(s, nn(p.reward.level, 2));      // a stored reward can only be one the rules could have produced
+    if (np.rewarded && p.reward && typeof p.reward === 'object') np.reward = rewardFor(s, nn(p.reward.level, 2), !!p.reward.hard && isHard(q));      // a stored reward can only be one the rules could have produced
     else np.rewarded = false;
     if (np.done && np.ok && !np.rewarded) np.practice = true;
     L.pending[s] = np;
@@ -174,6 +294,49 @@ function rewardable(L, subject, id, day) {
   return subject === 'math' ? d.math < DAILY_MATH_CAP : !d.items[subject].includes(id);
 }
 function current(L, subject) { return L.pending[subject] || null; }
+/* ---------------- v9 mastery model (rule-based, per topic) ----------------
+ * progress 0..1 = (independent first-try correct + ½ × other correct) / GOAL, scaled by accuracy. Hints and misses lower it because they
+ * move answers out of `first`. Weak = low accuracy or more misses than clean solves; due = not seen for a few days (spaced review). */
+function progress(L, k) {
+  const t = L.topics[k]; if (!t || !t.q) return 0;
+  const base = Math.min(1, (t.first + .5 * Math.max(0, t.ok - t.first)) / GOAL);
+  return base * (.6 + .4 * (t.ok / t.q));
+}
+const MASTERED = .8;
+function daysBetween(a, b) {
+  const pa = /^(\d{4})-(\d\d)-(\d\d)$/.exec(a || ''), pb = /^(\d{4})-(\d\d)-(\d\d)$/.exec(b || '');
+  return pa && pb ? Math.round((Date.UTC(+pb[1], +pb[2] - 1, +pb[3]) - Date.UTC(+pa[1], +pa[2] - 1, +pa[3])) / 864e5) : 0;
+}
+function isWeak(L, k) { const t = L.topics[k]; return !!t && t.q >= 2 && progress(L, k) < MASTERED && (t.ok / t.q < .7 || (t.err || 0) > t.first); }
+function isDue(L, k, day) { const t = L.topics[k]; return !!t && t.q > 0 && !!L.last[k] && daysBetween(L.last[k], day) >= (progress(L, k) >= MASTERED ? 7 : 3); }
+/* Prerequisites are "one earlier topic reached ≥ 40 % progress". They are ONLY used for opening topics by mastery; a topic whose unit the
+ * parent has reached (or passed) is open regardless, and add / subtract is always open, so the child can never be locked out. */
+const PRE = {expr: 'groups', t2: 'expr', t5: 'expr', t3: 't2', t4: 't5', t6: 't3', t7: 't4', t8: 't6', t9: 't7', t1: 't2', mword: 'expr'};
+const masteryOpen = (L, k) => !PRE[k] || progress(L, PRE[k]) >= .4;
+function effUnit(L) { return Math.min(UNITS.length - 1, L.settings.unit + (L.settings.mode === 'ahead' ? 1 : 0)); }
+function topicOpen(L, k) { const u = unitOfTopic(k); return u <= effUnit(L) || masteryOpen(L, k); }
+function chooseTopic(L, day, r) {
+  const eu = effUnit(L), reinforce = L.settings.mode === 'reinforce', open = k => topicOpen(L, k);
+  const cur = UNITS[eu].topics.filter(open);
+  const earlier = []; for (let u = 0; u <= eu; u++) UNITS[u].topics.forEach(k => { if (open(k)) earlier.push(k); });
+  let rev = earlier.filter(k => isWeak(L, k) || isDue(L, k, day));
+  if (!rev.length) rev = earlier.filter(k => L.topics[k] && L.topics[k].q && progress(L, k) < MASTERED);
+  const ahead = eu + 1 < UNITS.length ? UNITS[eu + 1].topics.filter(k => masteryOpen(L, k) && progress(L, k) < MASTERED) : [];   // strict: prerequisites must really be met
+  const x = r(), cut1 = reinforce ? .4 : .6, cut2 = reinforce ? .95 : .9;
+  let pool = x < cut1 ? cur : x < cut2 ? rev : ahead;
+  if (!pool.length) pool = cur.length ? cur : earlier.length ? earlier : UNITS[1].topics;      // never empty, never locked out
+  const w = pool.map(k => (k === L.lastTopic && pool.length > 1 ? .15 : 1) * (1.05 - progress(L, k)));
+  let tot = w.reduce((a, b) => a + b, 0), y = r() * tot;
+  for (let i = 0; i < pool.length; i++) { y -= w[i]; if (y <= 0) return pool[i]; }
+  return pool[pool.length - 1];
+}
+function templatesOf(k) { return MATH_TEMPLATES.concat(MULT_TEMPLATES).filter(t => t.topic === k).map(t => t.id); }
+function chooseMath(L, day, r) {
+  const k = chooseTopic(L, day, r), ids = templatesOf(k), ok = ids.filter(i => i !== L.lastTid);
+  const tid = pick(r, ok.length ? ok : ids);
+  L.lastTopic = k; L.lastTid = tid;
+  return tid;
+}
 function next(L, subject, day, seed) {
   const cur = L.pending[subject];
   if (cur && !cur.done) return cur;                         // an unfinished question cannot be re-rolled by leaving and coming back
@@ -181,8 +344,7 @@ function next(L, subject, day, seed) {
   const sd = (isInt(seed) ? seed : Math.floor(Math.random() * 4294967296)) >>> 0, r = prng(sd ^ 0x9e3779b9);
   let tid;
   if (subject === 'math') {
-    if (!L.bag.length) { L.bag = shuffle(MATH_TEMPLATES.map(t => t.id), r); if (cur && L.bag[0] === cur.tid) L.bag.push(L.bag.shift()); }
-    tid = L.bag.shift();
+    tid = chooseMath(L, day, r);
   } else {
     const items = ITEMS_OF[subject], rot = L.rot[subject] % items.length;
     const order = items.map((_, i) => items[(rot + i) % items.length]);
@@ -195,16 +357,18 @@ function next(L, subject, day, seed) {
   return p;
 }
 const levelOf = p => Math.min(2, Math.max(p.hint ? 1 : 0, p.wrong.length));
-function rewardFor(subject, level) {
-  const b = BASE[subject], f = FACTOR[level], gain = {};
+/* `hard` (a harder topic solved with no hint and no miss, level 0 only) adds a modest bonus. Incorrect answers never reach this function. */
+function rewardFor(subject, level, hard) {
+  const b = BASE[subject], f = FACTOR[level], gain = {}, bonus = !!hard && level === 0 && subject === 'math';
   Object.keys(b).forEach(k => { if (k !== 'points') gain[k] = Math.max(1, Math.round(b[k] * f)); });
-  return {gain, points: Math.max(1, Math.round(b.points * f)), level};
+  if (bonus) gain.wood += 3;
+  return {gain, points: Math.max(1, Math.round(b.points * f)) + (bonus ? 2 : 0), level, hard: bonus};
 }
 function useHint(L, subject) { const p = L.pending[subject]; if (!p || p.done) return null; p.hint = 1; return build(p).hint; }
 function record(L, p, q, ok) {
   const clean = ok && !p.hint && !p.wrong.length;
-  const s = L.stats[p.subject]; s.q++; if (ok) s.ok++; if (clean) s.first++; if (p.hint) s.hint++;
-  if (p.subject === 'math') { const t = L.topics[q.topic] || (L.topics[q.topic] = zStat()); t.q++; if (ok) t.ok++; if (clean) t.first++; if (p.hint) t.hint++; }
+  const s = L.stats[p.subject]; s.q++; if (ok) s.ok++; if (clean) s.first++; if (p.hint) s.hint++; s.err += p.wrong.length;
+  if (p.subject === 'math') { const t = L.topics[q.topic] || (L.topics[q.topic] = zStat()); t.q++; if (ok) t.ok++; if (clean) t.first++; if (p.hint) t.hint++; t.err += p.wrong.length; L.last[q.topic] = L.daily.date || L.last[q.topic] || ''; }
   L.recent.push({s: p.subject, t: q.topic, ok, hint: !!p.hint, w: p.wrong.length, d: L.daily.date}); if (L.recent.length > 20) L.recent.shift();
 }
 /* The one place a result is decided. `done` is set BEFORE anything is granted, so a double tap, a re-render or a reload (the
@@ -218,9 +382,10 @@ function answer(L, subject, value, day) {
   rollDay(L, day);
   if (value === q.answer) {
     p.done = true; p.ok = true;
-    const level = levelOf(p);
-    if (rewardable(L, subject, p.tid, day)) {
-      p.rewarded = true; p.reward = rewardFor(subject, level); L.solved[subject]++;
+    const level = levelOf(p), qid = p.tid + ':' + p.seed;
+    if (rewardable(L, subject, p.tid, day) && !L.seen.includes(qid)) {       // once per generated question id (tid + seed), also across resets
+      L.seen.push(qid); if (L.seen.length > SEEN_MAX) L.seen.shift();
+      p.rewarded = true; p.reward = rewardFor(subject, level, isHard(q)); L.solved[subject]++;
       if (subject === 'math') L.daily.math++; else L.daily.items[subject].push(p.tid);
     } else p.practice = true;
     record(L, p, q, true);
@@ -239,17 +404,73 @@ function claim(L) {
 }
 function summary(L) {
   const tot = zStat(); SUBJECTS.forEach(s => Object.keys(tot).forEach(k => { tot[k] += L.stats[s][k]; }));
-  const kind = {'+': zStat(), '-': zStat()};
+  const kind = {'+': zStat(), '-': zStat(), '×': zStat()};
   Object.keys(L.topics).forEach(k => { const t = L.topics[k], o = TOPIC[k].op; Object.keys(kind[o]).forEach(f => { kind[o][f] += t[f]; }); });
   return {total: tot, kind, successRate: tot.q ? tot.ok / tot.q : null, hintRate: tot.q ? tot.hint / tot.q : null};
 }
 function exportStats(L) {      // learning stats only: no village data, no open question, no identifiers
-  return JSON.stringify({app: 'kv-storybook-demo', kind: 'learning-stats', v: 1, solved: L.solved, stats: L.stats, topics: L.topics, recent: L.recent}, null, 1);
+  return JSON.stringify({app: 'kv-storybook-demo', kind: 'learning-stats', v: 2, solved: L.solved, stats: L.stats, topics: L.topics, recent: L.recent, settings: L.settings}, null, 1);
 }
 function resetStats(L) {       // stats only. The daily reward guard and the open questions are kept, so a reset cannot re-roll questions or farm rewards
-  const f = newState(); f.daily = L.daily; f.pending = L.pending; f.bag = L.bag; f.rot = L.rot; return f;
+  const f = newState(); f.daily = L.daily; f.pending = L.pending; f.bag = L.bag; f.rot = L.rot; f.settings = L.settings; f.seen = L.seen; return f;
 }
-const api = {SUBJECTS, NEED, DAILY_MATH_CAP, MAX_WRONG, FACTOR, TOPIC, MATH_TEMPLATES, JA_ITEMS, EN_ITEMS, mathQuestion, itemQuestion, build, newState, migrateLearn, today, rewardable,
+/* Parent setting: school unit (0..4) and mode. Changes the question mix only; no progress, reward or village data is touched. */
+function setSettings(L, unit, mode) {
+  if (isInt(unit) && unit >= 0 && unit < UNITS.length) L.settings.unit = unit;
+  if (['normal', 'ahead', 'reinforce'].includes(mode)) L.settings.mode = mode;
+  return L.settings;
+}
+/* Self-check routines (also used by the README one-liner): multiplication correctness, distractors, reward-once guards, migration, selection mix. Returns failure strings; [] = all passed. */
+function selfTest() {
+  const bad = [], D = '2026-10-31', must = (c, m) => { if (!c) bad.push(m); };
+  must(MULT_TEMPLATES.length >= 30, 'need >= 30 multiplication templates');
+  for (const t of MULT_TEMPLATES) for (let s = 1; s <= 300; s++) {
+    const q = mathQuestion(t.id, s * 7919 + 13), [a, n] = q.nums, tag = t.id + ':' + s;
+    must(q.choices.length === 4 && new Set(q.choices).size === 4 && q.choices.filter(c => c === q.answer).length === 1, 'choices ' + tag);
+    if (typeof q.answer === 'number') {
+      const prod = /^t\dc$/.test(t.id) ? n : q.expr.includes('+') || q.expr.includes('−') ? q.answer : a * n;
+      must(q.answer === prod || t.id === 'gr4' || t.id === 'gr3' || t.id === 'w2' || t.id === 'w3', 'answer ' + tag);
+      must(q.choices.every(c => isInt(c) && c >= 1 && c <= 100), 'range ' + tag);
+    } else must(typeof q.answer === 'string' && q.choices.every(c => typeof c === 'string'), 'string ' + tag);
+    if (t.id === 'gr1' || t.id === 'e3' || /^t\db$/.test(t.id) || t.id === 'w1' || t.id === 'w6' || t.id === 'gr5' || t.id === 'gr2') must(q.answer === a * n, 'product ' + tag);
+    if (t.id === 'gr4') must(q.answer === a * n && n >= 3, 'gr4 ' + tag);       // nums already holds the increased group count
+    if (/^t\da$/.test(t.id)) must(q.answer === a * n && q.text.startsWith(a + ' × ' + n + ' '), 'table ' + tag);
+    if (/^t\dc$/.test(t.id)) must(a * q.answer === +q.text.match(/= (\d+)/)[1], 'missing factor ' + tag);
+    if (t.id === 'w2') must(q.answer === a * n + q.nums[2], 'w2 ' + tag);
+    if (t.id === 'w3') must(q.answer === a * n - q.nums[2] && q.answer >= 1, 'w3 ' + tag);
+    if (t.id === 'e1' || t.id === 'e4' || t.id === 'w5') must(q.answer === a + ' × ' + n && !q.choices.includes(n + ' × ' + a), 'expr/no swapped order ' + tag);
+    must(!q.hint.includes('undefined') && !q.text.includes('undefined') && !q.text.includes('NaN') && !/undefined|NaN/.test(q.choices.join()), 'text ' + tag);
+  }
+  // reward guards
+  let L = newState(), p = next(L, 'math', D, 5), q = build(p), r = answer(L, 'math', q.answer, D);
+  must(r.correct && r.level === 0 && r.reward.gain.wood >= 12, 'first try full'); must(answer(L, 'math', q.answer, D).ignored === 'closed', 'double answer ignored'); must(claim(L).length === 1 && claim(L).length === 0, 'claim once');
+  L = newState(); p = next(L, 'math', D, 7); q = build(p); q.choices.filter(c => c !== q.answer).forEach(c => answer(L, 'math', c, D));
+  must(p.done && !p.ok && L.solved.math === 0 && claim(L).length === 0 && L.stats.math.ok === 0, 'wrong only: no reward');
+  L = newState(); p = next(L, 'math', D, 6); q = build(p); const w = q.choices.find(c => c !== q.answer); answer(L, 'math', w, D); r = answer(L, 'math', q.answer, D);
+  must(r.level === 1 && r.reward.gain.wood === 7 && !r.reward.hard, 'retry reduced');
+  L = newState(); p = next(L, 'math', D, 8); useHint(L, 'math'); r = answer(L, 'math', build(p).answer, D); must(r.level === 1 && r.reward.gain.wood < 12, 'hint reduced');
+  L = newState(); p = next(L, 'math', D, 9); const sameId = p.tid + ':' + p.seed; L.seen.push(sameId); r = answer(L, 'math', build(p).answer, D); must(!r.reward && r.practice && L.solved.math === 0, 'same question id pays once');
+  L = newState(); for (let i = 0; i < DAILY_MATH_CAP + 3; i++) { const pp = next(L, 'math', D, 100 + i); answer(L, 'math', build(pp).answer, D); } must(L.solved.math === DAILY_MATH_CAP, 'daily cap');
+  L = resetStats(L); must(L.seen.length > 0 && L.daily.math === DAILY_MATH_CAP, 'reset keeps guards');
+  // migration: v8 save (no settings / err / last) keeps history, adds defaults, and never invents mastery for new topics
+  const v8 = {solved: {math: 7, japanese: 1, english: 0}, stats: {math: {q: 9, ok: 7, first: 5, hint: 2}}, topics: {gather: {q: 4, ok: 4, first: 3, hint: 1}, remain: {q: 5, ok: 3, first: 2, hint: 1}}};
+  const m = migrateLearn(JSON.parse(JSON.stringify(v8)));
+  must(m.solved.math === 7 && m.topics.gather.ok === 4 && m.topics.remain.q === 5 && m.settings.unit === DEFAULT_UNIT && !m.topics.groups && !m.topics.t2 && m.v === 2, 'v8 migration');
+  const g = migrateLearn({solved: {math: -5, japanese: 'x'}, settings: {unit: 99, mode: 'zzz'}, topics: {t2: {q: 2, ok: 9, first: 9}}, seen: [1, 'a:1']});
+  must(g.solved.math === 0 && g.settings.unit === DEFAULT_UNIT && g.settings.mode === 'normal' && g.topics.t2.ok === 2 && g.topics.t2.first === 2 && g.seen.length === 1, 'garbage migration');
+  must(JSON.stringify(migrateLearn(JSON.parse(JSON.stringify(L))).settings) === JSON.stringify(L.settings), 'settings round trip');
+  // selection: bounded mix, never locked out, ahead only with prerequisites
+  L = newState(); const tally = {cur: 0, rev: 0, ahead: 0, bad: 0};
+  for (let i = 0; i < 600; i++) { const k = chooseTopic(L, D, prng(i * 31 + 7)); const u = unitOfTopic(k); if (u === 1) tally.cur++; else if (u === 0) tally.rev++; else { tally.ahead++; if (!topicOpen(L, k)) tally.bad++; } }
+  must(tally.bad === 0 && tally.ahead === 0 && tally.cur > 0, 'new child: no table topics before groups/expr progress ' + JSON.stringify(tally));
+  L.topics.groups = {q: 5, ok: 5, first: 5, hint: 0, err: 0}; L.topics.expr = {q: 5, ok: 5, first: 5, hint: 0, err: 0};
+  const t2 = {}; for (let i = 0; i < 1000; i++) { const k = chooseTopic(L, D, prng(i * 17 + 3)); t2[k] = (t2[k] || 0) + 1; }
+  must((t2.t2 || 0) + (t2.t5 || 0) > 0, 'times tables 2/5 appear (as ahead items) once groups + expr have progress');
+  must(!t2.t6 && !t2.t7 && !t2.t8 && !t2.t9, 'tables 6-9 stay closed without t3/t4 progress');
+  for (let u = 0; u < UNITS.length; u++) for (const mode of ['normal', 'ahead', 'reinforce']) { const X = newState(); setSettings(X, u, mode); for (let i = 0; i < 60; i++) { const pp = next(X, 'math', D, i * 5 + 1); must(!!build(pp), 'selection builds ' + u + mode); X.pending.math = null; } }
+  return bad;
+}
+const api = {SUBJECTS, NEED, DAILY_MATH_CAP, MAX_WRONG, FACTOR, TOPIC, UNITS, DEFAULT_UNIT, MULT_TEMPLATES, progress, MASTERED, isWeak, isDue, topicOpen, chooseTopic, setSettings, selfTest, isHard, MATH_TEMPLATES, JA_ITEMS, EN_ITEMS, mathQuestion, itemQuestion, build, newState, migrateLearn, today, rewardable,
   current, next, answer, useHint, claim, rewardFor, summary, exportStats, resetStats, levelOf};
 if (typeof module !== 'undefined' && module.exports) module.exports = api;
 return api;
@@ -1915,7 +2136,7 @@ function enterMode(mode) {
   else if (mode === 'move') setHint('動かしたい建物をタップ');
   else if (mode === 'store') setHint('しまいたい建物をタップ');
   else if (mode === 'expand') { setHint('金色のマスが新しく開拓できる土地だよ'); openSheet('🌱 土地を拡張', renderExpand); }
-  else if (mode === 'study') { setHint(''); studyView = null; openSheet('📚 まなぶ', renderStudy); sheet.classList.add('study-open'); }
+  else if (mode === 'study') { setHint(''); studyView = null; parentGate = null; parentOpen = false; openSheet('📚 まなぶ', renderStudy); sheet.classList.add('study-open'); }
   markDirty();
 }
 
@@ -1995,7 +2216,7 @@ function renderExpand(body) {
 }
 /* ----- v8 learning sheet: one question at a time; rewards ONLY come out of KVLearn.answer() for a correct choice ----- */
 const SUBJ_ICON = {math: '🧮', japanese: '📖', english: '🔤'};
-const SUBJ_NOTE = {math: '文しょうだいを よんで、たしざんか ひきざんかを かんがえよう。', japanese: 'ひらがな・かん字・みじかい文を よんで えらぼう。（音声認識はありません）', english: 'えと えいごを むすぼう。（音声の よみあげ・認識はありません）'};
+const SUBJ_NOTE = {math: '文しょうだいを よんで、たしざん・ひきざん・かけざんの どれかを かんがえよう。', japanese: 'ひらがな・かん字・みじかい文を よんで えらぼう。（音声認識はありません）', english: 'えと えいごを むすぼう。（音声の よみあげ・認識はありません）'};
 let studyView = null;                                   // null = subject list, otherwise the open subject
 function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
 function syncSkills() { KVLearn.SUBJECTS.forEach(k => { S.skills[k] = L.solved[k]; }); }
@@ -2029,21 +2250,67 @@ function renderStudyHome(body) {
   renderParent(body);
 }
 function pct(a, b) { return b ? Math.round(a / b * 100) + '%' : '—'; }
+const UNIT_WEEKS_NOTE = '学校の ほんとうの進み方は わかりません。先の単元は 2〜4週間さきの「おおまかな めやす」で、学校の予定ではありません。';
+/* Parent view only: one concise progress bar per topic (add / subtract word problems, groups, expression, each times table, multiplication word problems). */
+function renderMastery(d) {
+  d.appendChild(el('h4', '', '算数：トピックべつの 進みぐあい'));
+  KVLearn.UNITS.forEach((u, ui) => {
+    const wrap = el('div', 'mast');
+    wrap.appendChild(el('div', 'mast-unit' + (ui === L.settings.unit ? ' now' : ''), u.label + (ui === L.settings.unit ? '（いま設定中）' : '')));
+    u.topics.forEach(k => {
+      const t = L.topics[k] || {q: 0, ok: 0, first: 0, err: 0}, v = KVLearn.progress(L, k), row = el('div', 'mast-row'), tp = KVLearn.TOPIC[k];
+      row.appendChild(el('span', 'mast-name', `${tp.op === '+' ? '＋' : tp.op === '-' ? '−' : '×'} ${tp.label}`));
+      const m = el('div', 'meter'); m.setAttribute('role', 'img'); m.setAttribute('aria-label', `${tp.label} ${Math.round(v * 100)}%`);
+      const f = el('i'); f.style.width = Math.round(v * 100) + '%'; m.appendChild(f); row.appendChild(m);
+      const st = !t.q ? (KVLearn.topicOpen(L, k) ? 'まだ' : 'まだ（じゅんび中）') : v >= KVLearn.MASTERED ? 'できた' : KVLearn.isWeak(L, k) ? 'ふくしゅう' : 'れんしゅう中';
+      row.appendChild(el('span', 'mast-txt', `${st}　${t.ok}/${t.q}問・ヒントなし1回 ${t.first}`));
+      wrap.appendChild(row);
+    });
+    d.appendChild(wrap);
+  });
+  d.appendChild(el('p', 'note', 'ゲージは「ヒントなしで 1回でせいかい」を いちばん おもく 数えます。学力の判定ではありません。こどもには 次に とく もんだいと 教科の えらびだけが 見えます。'));
+}
+let parentGate = null;                                   // arithmetic gate passed during this page session (not stored)
+function renderSettings(d) {
+  const box = el('div', 'psettings'); box.appendChild(el('h4', '', '学校の いまの単元（おうちの方が えらぶ）'));
+  const s = L.settings, units = KVLearn.UNITS;
+  box.appendChild(el('p', 'note', 'はじめは「' + units[KVLearn.DEFAULT_UNIT].label + '」（10月下旬ごろの 目安）。かえても これまでの きろく・ごほうび・街は そのままです。'));
+  if (!parentGate) {
+    const a = 20 + Math.floor(Math.random() * 30), b = 20 + Math.floor(Math.random() * 30), row = el('div', 'parent-btns');
+    const inp = el('input'); inp.type = 'number'; inp.inputMode = 'numeric'; inp.setAttribute('aria-label', `おうちの方の かくにん：${a} + ${b} は？`); inp.className = 'gate-in';
+    const go = el('button', '', `かくにん：${a} + ${b} = `); go.type = 'button';
+    go.addEventListener('click', () => { if (+inp.value === a + b) { parentGate = true; rerenderStudy(true); } else { inp.value = ''; toast('もういちど ためしてね（おうちの方 むけの せっていです）'); } });
+    row.appendChild(go); row.appendChild(inp); box.appendChild(row); d.appendChild(box); return;
+  }
+  const grp = el('div', 'unit-list'); grp.setAttribute('role', 'radiogroup'); grp.setAttribute('aria-label', '学校の いまの単元');
+  units.forEach((u, i) => {
+    const b = el('button', 'unit-btn', u.label); b.type = 'button'; b.setAttribute('role', 'radio'); b.setAttribute('aria-checked', String(i === s.unit));
+    b.addEventListener('click', () => { KVLearn.setSettings(L, i, s.mode); saveNow(); rerenderStudy(true); });
+    grp.appendChild(b);
+  });
+  box.appendChild(grp);
+  const modes = [['normal', 'ふつう（いまの単元を 中心に）'], ['ahead', 'すこし先へ（次の単元から）'], ['reinforce', 'ふくしゅう多め']], mg = el('div', 'unit-list'); mg.setAttribute('role', 'radiogroup'); mg.setAttribute('aria-label', 'すすめかた');
+  modes.forEach(m => { const b = el('button', 'unit-btn', m[1]); b.type = 'button'; b.setAttribute('role', 'radio'); b.setAttribute('aria-checked', String(m[0] === s.mode)); b.addEventListener('click', () => { KVLearn.setSettings(L, s.unit, m[0]); saveNow(); rerenderStudy(true); }); mg.appendChild(b); });
+  box.appendChild(mg);
+  const nx = units[Math.min(units.length - 1, s.unit + 1)];
+  box.appendChild(el('p', 'note', `つぎの 目安：${s.unit + 1 < units.length ? nx.label : 'この デモの さいごの 単元です'}。もんだいの わりあいは いまの単元 約60%、ふくしゅう 約30%、先どり 約10%（先どりは 前の トピックが できているときだけ。ふくしゅう多めでは 先どり なし）。${UNIT_WEEKS_NOTE}`));
+  const lock = el('button', '', 'せっていを とじる'); lock.type = 'button'; lock.addEventListener('click', () => { parentGate = null; rerenderStudy(true); });
+  const row = el('div', 'parent-btns'); row.appendChild(lock); box.appendChild(row);
+  d.appendChild(box);
+}
+let parentOpen = false;
 function renderParent(body) {
-  const d = el('details', 'parent'), sum = el('summary', '', 'おうちの方へ（学習きろく）'); d.appendChild(sum);
+  const d = el('details', 'parent'), sum = el('summary', '', 'おうちの方へ（学習きろく・せってい）'); d.appendChild(sum);
+  d.open = parentOpen; d.addEventListener('toggle', () => { parentOpen = d.open; });
   const s = KVLearn.summary(L), t = s.total;
   const rows = [['こたえた問題', `${t.q}問`], ['せいかい', t.q ? `${t.ok}問（${pct(t.ok, t.q)}）` : '—'], ['ヒントなしで 1回でせいかい', t.q ? `${t.first}問` : '—'], ['ヒントを つかった', t.q ? pct(t.hint, t.q) : '—'],
-    ['たしざんで とく問題', s.kind['+'].q ? `${s.kind['+'].ok}/${s.kind['+'].q}問せいかい` : 'まだありません'], ['ひきざんで とく問題', s.kind['-'].q ? `${s.kind['-'].ok}/${s.kind['-'].q}問せいかい` : 'まだありません']];
+    ['たしざんで とく問題', s.kind['+'].q ? `${s.kind['+'].ok}/${s.kind['+'].q}問せいかい` : 'まだありません'], ['ひきざんで とく問題', s.kind['-'].q ? `${s.kind['-'].ok}/${s.kind['-'].q}問せいかい` : 'まだありません'],
+    ['かけざんの 問題', s.kind['×'].q ? `${s.kind['×'].ok}/${s.kind['×'].q}問せいかい` : 'まだありません']];
   const dl = el('dl', 'stats');
   rows.forEach(r => { dl.appendChild(el('dt', '', r[0])); dl.appendChild(el('dd', '', r[1])); });
   d.appendChild(dl);
-  const tk = Object.keys(L.topics).filter(k => L.topics[k].q);
-  if (tk.length) {
-    d.appendChild(el('h4', '', '算数：文のタイプべつ'));
-    const ul = el('ul', 'topics');
-    tk.forEach(k => { const x = L.topics[k]; ul.appendChild(el('li', '', `${KVLearn.TOPIC[k].op === '+' ? '＋' : '−'} ${KVLearn.TOPIC[k].label}：${x.ok}/${x.q}問せいかい（ヒントなし ${x.first}）`)); });
-    d.appendChild(ul);
-  }
+  renderMastery(d);
+  renderSettings(d);
   if (L.recent.length) {
     d.appendChild(el('h4', '', 'さいきんの 5問'));
     d.appendChild(el('p', 'recent', L.recent.slice(-5).reverse().map(e => `${SKILL_NAME[e.s]}${e.ok ? '○' : '△'}${e.hint ? '(ヒント)' : ''}`).join('  ')));
@@ -2099,6 +2366,11 @@ function renderQuestion(body, subj) {
   box.appendChild(meterEl(subj));
   if (q.visual) box.appendChild(el('div', 'q-visual', q.visual));
   box.appendChild(el('p', 'q-text', q.text));
+  if (q.groups && q.groups[0] >= 1 && q.groups[1] >= 1 && q.groups[0] <= 9 && q.groups[1] <= 9) {      // equal groups drawn with plain DOM (no canvas)
+    const gv = el('div', 'q-groups'); gv.setAttribute('role', 'img'); gv.setAttribute('aria-label', `${q.groups[0]}こずつ ${q.groups[1]}つ分の ず`);
+    for (let i = 0; i < q.groups[1]; i++) { const g = el('span', 'grp'); for (let j = 0; j < q.groups[0]; j++) g.appendChild(el('i', 'dot')); gv.appendChild(g); }
+    box.appendChild(gv);
+  }
   const long = q.choices.some(c => String(c).length > 6);
   const ch = el('div', 'q-choices' + (long ? ' long' : ''));
   q.choices.forEach(c => {
