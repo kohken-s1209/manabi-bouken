@@ -66,7 +66,8 @@ function circle(ctx, x, y, r, fill) { ctx.beginPath(); ctx.arc(x, y, r, 0, 6.283
  * 3. Canvas, view and projection
  * ==================================================================== */
 const canvas = $('scene');
-const ctx = canvas.getContext('2d');
+const mainCtx = canvas.getContext('2d');
+let ctx = mainCtx;                    // drawing helpers use `ctx`; it is pointed at the cached static layer while that is rebuilt
 const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 let W = 0, H = 0, dpr = 1, bg = null, bgPrev = null, bgFade = 0, T = 0;
 const stageOf = n => n - N_MIN;      // 0..4 : 16 / 25 / 36 / 49 / 64 tiles
@@ -115,14 +116,23 @@ function layout() {
   area.top = hudB + 44;
   area.bottom = window.innerHeight - barH - sheetH - (placing ? 78 : 0) - 6;
   computeTarget();
+  wake();                                // the camera target may have changed: let the loop ease toward it
+}
+/* Render resolution: phones are capped at 1.25x, larger screens at 1.5x, and a pixel budget keeps the backing store
+ * (and the three full-screen cached layers) small. Text is DOM, so the lower canvas scale does not blur it. */
+function pickDpr(w, h) {
+  const phone = Math.min(w, h) < 700 || (window.matchMedia && window.matchMedia('(pointer:coarse)').matches);
+  const cap = phone ? 1.25 : 1.5, budget = 1.5e6;
+  return Math.max(1, Math.min(window.devicePixelRatio || 1, cap, Math.sqrt(budget / Math.max(1, w * h))));
 }
 function resize() {
-  dpr = Math.min(2, window.devicePixelRatio || 1);
   W = window.innerWidth; H = window.innerHeight;
+  dpr = pickDpr(W, H);
   canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
+  stat = null; vgGrad = null;
   sprites.clear();
   bg = buildBackdrop(W, H, dpr, stageOf(S.n)); bgPrev = null; bgFade = 0;
-  layout(); snapView(); dirty = true;
+  layout(); snapView(); markDirty();
 }
 
 /* tile <-> screen */
@@ -937,6 +947,7 @@ const wild = [];
     o.jit = r();
     wild.push(o);
   }
+  wild.sort((a, b) => (a.x + a.y) - (b.x + b.y));       // painter order for point objects, sorted once
 })();
 /* Visibility is decided by the clearing outline (clearDist): trees stand only beyond it, so the tree line IS the
  * boundary of the meadow and moves outward with every expansion. Bushes and rocks may hug the edge; flowers live
@@ -1005,13 +1016,94 @@ const rectPts = (x, y, hw, up, down) => [[x - hw, y - up], [x + hw, y - up], [x 
 const clouds = [{x: .1, y: .09, s: 90, v: 5}, {x: .55, y: .16, s: 120, v: 3}, {x: .85, y: .06, s: 70, v: 4}, {x: .35, y: .24, s: 80, v: 2}];
 const leaves = Array.from({length: 9}, (_, i) => ({x: (i * 0.13) % 1, y: (i * 0.37) % 1, s: 4 + (i % 3) * 1.5, v: 14 + (i % 4) * 5, ph: i * 1.3}));
 const sparks = [];
-let dirty = true, last = 0;
+let dirty = 1, last = 0, rafId = 0, lastDrawAt = 0, lastActive = 0;
+/* Event-driven loop: a frame is requested only while something is animating, being touched, or marked dirty.
+ * Ambient motion (clouds, leaves) is throttled and stops after AMBIENT_IDLE_MS without interaction. */
+const AMBIENT_IDLE_MS = 8000, AMBIENT_STEP_MS = 66;
+function wake() { lastActive = performance.now(); if (!rafId && !document.hidden) rafId = requestAnimationFrame(frame); }
+function markDirty() { dirty = 1; wake(); }
 
 function spawnSparks(x, y, n, cols) {
   for (let i = 0; i < n; i++) { const a = Math.random() * 6.28, v = 40 + Math.random() * 90; sparks.push({x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 40, life: 1, col: cols[i % cols.length], s: 3 + Math.random() * 4}); }
 }
 
+/* ---- cached static layer ----
+ * Ground (meadow, stream, road) and all forest scenery that no building can overlap are painted ONCE into an offscreen
+ * canvas and only blitted afterwards. It is rebuilt when the signature below changes: viewport/DPR, camera
+ * (zoom/pan), land size, building set/positions, or the expand-preview marking. Animation ticks never touch it.
+ * While the camera is still easing (or the expand effect runs) the same code paints live, in the original order. */
+let stat = null, vgGrad = null;
+const perf = {on: /[?&]perf=1(&|$)/.test(location.search), builds: 0, fps: 0, ms: 0, frames: 0, t0: 0, el: null};
+const VIEW_KEYS = ['tw', 'cx', 'cy', 'c', 'lo', 'hi'];
+const viewSettled = () => VIEW_KEYS.every(k => view[k] === tgt[k]);
+function staticSig() {
+  return [W, H, dpr, Math.round(area.bottom), S.n, ui.mode === 'expand' && S.n < N_MAX ? 1 : 0, view.tw, view.cx, view.cy, view.c, view.lo, view.hi,
+    S.blds.map(b => b.id + b.type + b.x + ',' + b.y).join(';')].join('|');
+}
+const bboxHit = (a, b) => a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1;
+const bldEnt = (b, P, tw) => { const it = ITEMS[b.type]; return {k: b.x + it.w + b.y + it.h - .01 + b.x * 1e-4, x0: b.x, x1: b.x + it.w, y0: b.y, y1: b.y + it.h,
+  f: () => drawBuilding(ctx, P, tw, b.type, b.x, b.y, ui.mode === 'move' && ui.moveId === b.id ? .5 : 1, T)}; };
+
+/* Splits scenery into `free` (cannot overlap any building: painted first, in simple k order) and `dyn` (touches a
+ * building's painted box, or is highlighted for the next expansion: depth-sorted exactly together with the buildings). */
+function collectWild(P, tw, extraGhosts) {
+  const lp = landPoly(P, tw, .25), clearing = ui.mode === 'expand' && S.n < N_MAX, nowMs = performance.now();
+  const boxes = S.blds.map(b => bboxOf(silhouette(b.type, b.x, b.y, P, tw)));
+  boxes.forEach(q => { q.x0 -= 4; q.y0 -= 4; q.x1 += 4; q.y1 += 4; });
+  const free = [], dyn = [];
+  const place = (o, type, p, s, mark, alpha, ghostK) => {
+    const bx = bboxOf(wildBox(type, p, s)), k = o.x + o.y;
+    const ent = {k, x0: o.x, x1: o.x, y0: o.y, y1: o.y, f: () => {
+      if (mark) {
+        const pu = .5 + .5 * Math.sin(T * 4);
+        ctx.fillStyle = `rgba(255,215,90,${.28 + pu * .25})`; ctx.strokeStyle = 'rgba(255,240,170,.9)'; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.ellipse(p[0], p[1], s * .42, s * .13, 0, 0, 6.2832); ctx.fill(); ctx.stroke();
+      }
+      if (ghostK) {
+        const k2 = clamp((performance.now() - ghostK.t0) / (reduced ? 1 : 900), 0, 1);
+        if (k2 >= 1) return;
+        ctx.save(); ctx.translate(p[0], p[1]);
+        if (!reduced) ctx.rotate(Math.sin(k2 * 11 + o.seed) * .14 * (1 - k2));       // sways, then shrinks and dissolves
+        drawWildObj(ctx, type, o, 0, k2 * s * .06, s * (1 - k2 * .55), (1 - k2) * (1 - k2));
+        ctx.restore();
+        circle(ctx, p[0] - s * .2 * k2, p[1] - s * .2 - k2 * s * .3, s * (.14 + k2 * .2), `rgba(255,252,225,${.5 * (1 - k2)})`);
+        circle(ctx, p[0] + s * .22 * k2, p[1] - s * .12 - k2 * s * .2, s * (.1 + k2 * .18), `rgba(235,248,190,${.45 * (1 - k2)})`);
+      } else drawWildObj(ctx, type, o, p[0], p[1], s, alpha);
+    }};
+    (mark || boxes.some(q => boxesTouch(bx, q, 0)) ? dyn : free).push(ent);
+  };
+  for (let i = 0; i < wild.length; i++) {          // `wild` is pre-sorted by k, so `free` needs no further sort
+    const o = wild[i], info = wildInfo(o, P, tw, lp, S.n);
+    if (!info) continue;
+    place(o, info.type, info.p, info.s, clearing && info.type !== 'stump' && !wildVisible(o, S.n + 1), 1, null);
+  }
+  if (extraGhosts) fxGhosts.forEach(g => {
+    if (nowMs - g.t0 >= (reduced ? 1 : 900)) return;
+    place(g.o, g.type, P(g.o.x, g.o.y), wildSize(g.type, g.o, tw), false, 1, g);
+  });
+  return {free, dyn};
+}
+function renderGround(P) {
+  drawLand(P);                         // the meadow first, so the stream and road cross it instead of being painted over
+  drawWater(P);
+  drawPath(P);
+}
+function buildStatic(sig, P, tw) {
+  perf.builds++;
+  if (!stat) { const c = document.createElement('canvas'); c.width = canvas.width; c.height = canvas.height; stat = {cv: c, g: c.getContext('2d')}; }
+  const keepT = T; T = 0;                                  // the cached picture is the calm, frozen water state
+  ctx = stat.g; ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H);
+  renderGround(P);
+  const {free, dyn} = collectWild(P, tw, false);
+  free.forEach(e => e.f());
+  ctx = mainCtx; T = keepT;
+  stat.sig = sig;
+  stat.sorted = depthSort(dyn.concat(S.blds.map(b => bldEnt(b, P, tw))));
+  stat.fg = foregroundList(P);
+}
+
 function draw() {
+  const t0 = perf.on ? performance.now() : 0;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, W, H);
   ctx.drawImage(bg.sky, 0, 0, W, H);
@@ -1022,51 +1114,27 @@ function draw() {
   } else ctx.drawImage(bg.far, 0, 0, W, H);
   const P = curP(), tw = view.tw, uz = tw * .55;
 
-  drawLand(P);                         // the meadow first, so the stream and road cross it instead of being painted over
-  drawWater(P);
-  drawPath(P);
-  drawExpandGlow(P);
-  drawOverlays(P);
-
-  // depth-sorted entities (forest objects are points, buildings are footprint rectangles)
-  const ents = [];
-  const lp = landPoly(P, tw, .25), nowMs = performance.now();
-  const clearing = ui.mode === 'expand' && S.n < N_MAX;
-  wild.forEach(o => {
-    const info = wildInfo(o, P, tw, lp, S.n);
-    if (!info) return;
-    const {type, p, s} = info, mark = clearing && type !== 'stump' && !wildVisible(o, S.n + 1);
-    ents.push({k: o.x + o.y, x0: o.x, x1: o.x, y0: o.y, y1: o.y, f: () => {
-      if (mark) {                      // trees that the next expansion will clear glow gold
-        const pu = .5 + .5 * Math.sin(T * 4);
-        ctx.fillStyle = `rgba(255,215,90,${.28 + pu * .25})`; ctx.strokeStyle = 'rgba(255,240,170,.9)'; ctx.lineWidth = 1.5;
-        ctx.beginPath(); ctx.ellipse(p[0], p[1], s * .42, s * .13, 0, 0, 6.2832); ctx.fill(); ctx.stroke();
-      }
-      drawWildObj(ctx, type, o, p[0], p[1], s, 1);
-    }});
-  });
-  fxGhosts.forEach(g => {              // trees being cleared: shrink and fade where they stood
-    const k = clamp((nowMs - g.t0) / (reduced ? 1 : 900), 0, 1);
-    if (k >= 1) return;
-    const p = P(g.o.x, g.o.y), s = wildSize(g.type, g.o, tw);
-    ents.push({k: g.o.x + g.o.y, x0: g.o.x, x1: g.o.x, y0: g.o.y, y1: g.o.y, f: () => {
-      ctx.save(); ctx.translate(p[0], p[1]);
-      if (!reduced) ctx.rotate(Math.sin(k * 11 + g.o.seed) * .14 * (1 - k));       // sways, then shrinks and dissolves
-      drawWildObj(ctx, g.type, g.o, 0, k * s * .06, s * (1 - k * .55), (1 - k) * (1 - k));
-      ctx.restore();
-      circle(ctx, p[0] - s * .2 * k, p[1] - s * .2 - k * s * .3, s * (.14 + k * .2), `rgba(255,252,225,${.5 * (1 - k)})`);
-      circle(ctx, p[0] + s * .22 * k, p[1] - s * .12 - k * s * .2, s * (.1 + k * .18), `rgba(235,248,190,${.45 * (1 - k)})`);
-    }});
-  });
-  S.blds.forEach(b => {
-    const it = ITEMS[b.type], moving = ui.mode === 'move' && ui.moveId === b.id;
-    ents.push({k: b.x + it.w + b.y + it.h - .01 + b.x * 1e-4, x0: b.x, x1: b.x + it.w, y0: b.y, y1: b.y + it.h,
-      f: () => drawBuilding(ctx, P, tw, b.type, b.x, b.y, moving ? .5 : 1, T)});
-  });
-  depthSort(ents).forEach(e => e.f());
+  const live = !viewSettled() || fx || fxGhosts.length > 0;
+  let fgList;
+  if (!live) {
+    const sig = staticSig();
+    if (!stat || stat.sig !== sig) buildStatic(sig, P, tw);
+    ctx.drawImage(stat.cv, 0, 0, W, H);
+    drawOverlays(P);
+    stat.sorted.forEach(e => e.f());
+    fgList = stat.fg;
+  } else {                              // camera easing / expand effect: paint live, original layer order
+    renderGround(P);
+    drawExpandGlow(P);
+    drawOverlays(P);
+    const {free, dyn} = collectWild(P, tw, true);
+    free.sort((a, b) => a.k - b.k).forEach(e => e.f());
+    depthSort(dyn.concat(S.blds.map(b => bldEnt(b, P, tw)))).forEach(e => e.f());
+    fgList = foregroundList(P);
+  }
 
   drawGhostAndSelection(P, uz);
-  drawForeground(P);
+  drawForegroundList(fgList);
 
   // sparkles
   for (let i = sparks.length - 1; i >= 0; i--) {
@@ -1081,9 +1149,12 @@ function draw() {
     ctx.beginPath(); ctx.ellipse(0, 0, l.s, l.s * .5, 0, 0, 6.2832); ctx.fill(); ctx.restore();
   });
   // vignette
-  const vg = ctx.createRadialGradient(W / 2, H * .5, Math.min(W, H) * .35, W / 2, H * .5, Math.max(W, H) * .75);
-  vg.addColorStop(0, 'rgba(50,70,20,0)'); vg.addColorStop(1, 'rgba(50,60,20,.28)');
-  ctx.fillStyle = vg; ctx.fillRect(0, 0, W, H);
+  if (!vgGrad) {
+    vgGrad = ctx.createRadialGradient(W / 2, H * .5, Math.min(W, H) * .35, W / 2, H * .5, Math.max(W, H) * .75);
+    vgGrad.addColorStop(0, 'rgba(50,70,20,0)'); vgGrad.addColorStop(1, 'rgba(50,60,20,.28)');
+  }
+  ctx.fillStyle = vgGrad; ctx.fillRect(0, 0, W, H);
+  if (perf.on) perf.ms += (performance.now() - t0 - perf.ms) * .1;
 }
 
 /* "It opened up!": freshly cleared tiles flash warm and fade outward from the village centre, with twinkles
@@ -1202,10 +1273,10 @@ const fg = (() => { const r = rng(2024), a = []; for (let i = 0; i < 14; i++) a.
 /* The foreground only frames the picture: low plants in thin side strips that narrow and thin out as the meadow opens
  * up. The whole centre (the interaction zone) and everything inside the plot outline stay free, and nothing here is
  * tall enough to read as a wall of trees. */
-function drawForeground(P) {
-  const tw = view.tw, grow = clamp(view.hi - view.lo - N_MIN, 0, 4), lp = landPoly(P, tw, .5);
+function foregroundList(P) {
+  const out = [], tw = view.tw, grow = clamp(view.hi - view.lo - N_MIN, 0, 4), lp = landPoly(P, tw, .5);
   const top = view.cy + tw * .6, span = area.bottom - 12 - top;
-  if (span < 10) return;
+  if (span < 10) return out;
   const strip = .15 - grow * .025;               // 15% of each side at 16 tiles, 5% at 64
   const keep = Math.round(12 - grow * 2.5);      // fewer foreground plants as the land opens up
   fg.forEach((f, i) => {
@@ -1216,22 +1287,48 @@ function drawForeground(P) {
     // the centre interaction zone (everything between the two side strips) and the plot outline stay free
     if (x > W * strip && x < W * (1 - strip)) return;
     if (nearStream(x, y, tw * .8) || polysOverlap(rectPts(x, y, s * .9, s * .8, s * .05), lp, 0)) return;
-    if (f.t === 'bush') drawSprite(ctx, 'bush', f.k, f.seed, x, y, s, .92); else drawFlowerPatch(ctx, x, y, s, f.seed);
+    out.push({f, x, y, s});
   });
+  return out;
+}
+function drawForegroundList(list) {
+  list.forEach(({f, x, y, s}) => { if (f.t === 'bush') drawSprite(ctx, 'bush', f.k, f.seed, x, y, s, .92); else drawFlowerPatch(ctx, x, y, s, f.seed); });
 }
 
+/* full-rate animation (camera, grid fade, effects, long-press ring) vs. gentle pulsing highlights (~30 fps) */
+const isBusy = want => !viewSettled() || gridA !== want || bgFade > 0 || sparks.length > 0 || ui.hold || fx || fxGhosts.length > 0;
+const isPulsing = () => !reduced && (ui.mode === 'expand' || ui.mode === 'store' || ui.ghost || ui.sel || ui.lifted);
 function frame(ts) {
-  const dt = Math.min(.05, (ts - last) / 1000 || .016); last = ts;
+  rafId = 0;
+  if (document.hidden) return;                         // no CPU while the tab is hidden; visibilitychange wakes us
+  const now = performance.now();
+  const dt = Math.min(.05, (ts - last) / 1000 || .016);
+  const want = (ui.mode === 'build' || ui.mode === 'move') ? 1 : 0;
+  // pure ambient motion is throttled; interaction/animation frames run at full rate
+  if (!dirty && !isBusy(want) && now - lastDrawAt < (isPulsing() ? 33 : AMBIENT_STEP_MS)) { rafId = requestAnimationFrame(frame); return; }
+  last = ts;
   if (!reduced) T += dt;
   const k = reduced ? 1 : 1 - Math.exp(-dt * 6);
-  ['tw', 'cx', 'cy', 'c', 'lo', 'hi'].forEach(key => { view[key] += (tgt[key] - view[key]) * k; if (Math.abs(tgt[key] - view[key]) < .001) view[key] = tgt[key]; });
-  const want = (ui.mode === 'build' || ui.mode === 'move') ? 1 : 0;
+  VIEW_KEYS.forEach(key => { view[key] += (tgt[key] - view[key]) * k; if (Math.abs(tgt[key] - view[key]) < .001) view[key] = tgt[key]; });
   gridA += (want - gridA) * (reduced ? 1 : 1 - Math.exp(-dt * 10));
-  if (bgFade > 0) { bgFade = reduced ? 0 : Math.max(0, bgFade - dt / 1.4); if (bgFade === 0) bgPrev = null; dirty = true; }
-  for (let i = fxGhosts.length - 1; i >= 0; i--) if (performance.now() - fxGhosts[i].t0 > (reduced ? 1 : 900)) fxGhosts.splice(i, 1);
-  if (!reduced || dirty || sparks.length || ui.hold || fx || fxGhosts.length) { draw(); dirty = false; }
+  if (Math.abs(want - gridA) < .01) gridA = want;
+  if (bgFade > 0) { bgFade = reduced ? 0 : Math.max(0, bgFade - dt / 1.4); if (bgFade === 0) bgPrev = null; }
+  for (let i = fxGhosts.length - 1; i >= 0; i--) if (now - fxGhosts[i].t0 > (reduced ? 1 : 900)) fxGhosts.splice(i, 1);
+  dirty = 0; draw(); lastDrawAt = now;
   updateChips();
-  requestAnimationFrame(frame);
+  if (perf.on) updatePerf(now);
+  // keep going only while something moves or ambient motion is still allowed; otherwise sleep until wake()
+  const ambient = !reduced && now - lastActive < AMBIENT_IDLE_MS;
+  if (dirty || isBusy(want) || isPulsing() || ambient) rafId = requestAnimationFrame(frame);
+}
+function updatePerf(now) {
+  perf.frames++;
+  if (!perf.t0) perf.t0 = now;
+  if (now - perf.t0 >= 500) {
+    perf.fps = perf.frames * 1000 / (now - perf.t0); perf.frames = 0; perf.t0 = now;
+    if (!perf.el) { perf.el = document.createElement('div'); perf.el.className = 'perf'; perf.el.setAttribute('aria-hidden', 'true'); $('app').appendChild(perf.el); }
+    perf.el.textContent = `fps ${perf.fps.toFixed(0)} | draw ${perf.ms.toFixed(1)}ms | canvas ${canvas.width}x${canvas.height} @${dpr.toFixed(2)} | cache x${perf.builds}`;
+  }
 }
 
 /* ======================================================================
@@ -1316,7 +1413,7 @@ function enterMode(mode) {
   else if (mode === 'store') setHint('しまいたい建物をタップ');
   else if (mode === 'expand') { setHint('金色のマスが新しく開拓できる土地だよ'); openSheet('🌱 土地を拡張', renderExpand); }
   else if (mode === 'study') { setHint(''); openSheet('📚 学ぶ（サンプル）', renderStudy); }
-  dirty = true;
+  markDirty();
 }
 
 /* ----- sheets ----- */
@@ -1345,7 +1442,7 @@ function chooseBuild(type) {
   if (!isUnlocked(type)) { toast('🔒 ' + ITEMS[type].need.map(k => SKILL_NAME[k]).join('・') + 'を学ぶと解放されるよ'); return; }
   ui.buildType = type; ui.ghost = null; hideAction();
   setHint(ITEMS[type].name + '：置きたい場所をタップ');
-  refreshTray(); dirty = true;
+  refreshTray(); markDirty();
 }
 function refreshTray() {
   const cards = sheetBody.querySelector('.cards'), sl = cards ? cards.scrollLeft : 0;
@@ -1353,7 +1450,7 @@ function refreshTray() {
   const nc = sheetBody.querySelector('.cards'); if (nc) nc.scrollLeft = sl;
 }
 function drawThumb(cv, type) {
-  const r = Math.min(2, window.devicePixelRatio || 1), cw = window.innerWidth >= 700 ? 112 : 96, ch = window.innerWidth >= 700 ? 84 : 72;
+  const r = Math.min(1.5, window.devicePixelRatio || 1), cw = window.innerWidth >= 700 ? 112 : 96, ch = window.innerWidth >= 700 ? 84 : 72;
   cv.width = cw * r; cv.height = ch * r;
   const c = cv.getContext('2d'); c.scale(r, r);
   const it = ITEMS[type], g = c.createLinearGradient(0, 0, 0, ch); g.addColorStop(0, '#d8f0f4'); g.addColorStop(1, '#b8dc86');
@@ -1406,7 +1503,7 @@ function study(k, btn) {
   const r = btn.getBoundingClientRect(); spawnSparks(r.left + r.width / 2, r.top, 10, ['#ffe08a', '#fff', '#ffb3c6']);
   toast(`${SKILL_NAME[k]}がんばったね！ ${costText(s.gain)} 開拓点+${s.pts}`);
   updateHUD();
-  sheetBody.innerHTML = ''; renderStudy(sheetBody); dirty = true;
+  sheetBody.innerHTML = ''; renderStudy(sheetBody); markDirty();
   const newly = Object.keys(ITEMS).filter(t => ITEMS[t].need.length && isUnlocked(t) && ITEMS[t].need.includes(k) && ITEMS[t].need.every(q => S.skills[q] >= SKILL_NEED) && ITEMS[t].need.some(q => q === k && S.skills[q] === SKILL_NEED));
   if (newly.length) setTimeout(() => toast('✨ ' + newly.map(t => ITEMS[t].name).join('・') + ' が解放されたよ！'), 900);
 }
@@ -1433,7 +1530,7 @@ function doExpand() {
   spawnSparks(view.cx, view.cy, 24, ['#ffe08a', '#fff', '#b9e48d']);
   bgPrev = bg; bgFade = reduced ? 0 : 1; bg = buildBackdrop(W, H, dpr, stageOf(newN)); if (reduced) bgPrev = null;
   toast(`🌱 森を切り開いて、土地が ${S.n * S.n} マスに広がったよ！`);
-  sheetBody.innerHTML = ''; renderExpand(sheetBody); dirty = true;
+  sheetBody.innerHTML = ''; renderExpand(sheetBody); markDirty();
 }
 function setGhost(tile) {
   const type = ui.mode === 'move' ? (S.blds.find(q => q.id === ui.moveId) || {}).type : ui.buildType;
@@ -1457,7 +1554,7 @@ function setGhost(tile) {
     else if (b.x === x && b.y === y) showAction('いまの場所だよ', '移動', false);
     else showAction(it.name + 'をここへ動かす', '移動', true);
   }
-  dirty = true;
+  markDirty();
 }
 function confirmAction() {
   const g = ui.ghost; if (!g || !g.ok) return;
@@ -1473,7 +1570,7 @@ function confirmAction() {
     toast('🎉 ' + it.name + 'が建ったよ！', () => {
       S.blds = S.blds.filter(q => q.id !== nb.id);
       if (fromStore) S.stored[type] = (S.stored[type] || 0) + 1; else Object.entries(it.cost).forEach(([k, v]) => S[k] += v);
-      updateHUD(); sheetBody.innerHTML = ''; if (ui.mode === 'build') renderBuildTray(sheetBody); dirty = true;
+      updateHUD(); sheetBody.innerHTML = ''; if (ui.mode === 'build') renderBuildTray(sheetBody); markDirty();
     });
     refreshTray();
   } else if (ui.mode === 'move') {
@@ -1484,11 +1581,11 @@ function confirmAction() {
     const it = ITEMS[b.type], p = curP()(b.x + it.w / 2, b.y + it.h / 2, view.tw * .4); spawnSparks(p[0], p[1], 10, ['#fff', '#d7ffb0']);
     toast('✨ ' + it.name + 'を動かしたよ', () => {
       if (canPlace(b.type, old.x, old.y, b.id).ok) { b.x = old.x; b.y = old.y; } else toast('元の場所はふさがっているよ');
-      dirty = true;
+      markDirty();
     });
     if (ui.lifted) enterMode('explore');            // long-press move ends back in browse mode
   }
-  dirty = true;
+  markDirty();
 }
 function askStore(b) {
   const it = ITEMS[b.type];
@@ -1507,11 +1604,11 @@ function doStore(id) {
     if (S.blds.some(q => q.id === b.id)) return;
     const res = canPlace(b.type, b.x, b.y);
     if (!res.ok) { toast('元の場所がふさがっているので、建てるメニューから置いてね'); return; }
-    S.stored[b.type]--; S.blds.push(b); dirty = true;
+    S.stored[b.type]--; S.blds.push(b); markDirty();
   });
-  dirty = true;
+  markDirty();
 }
-function select(id) { ui.sel = id; dirty = true; if (id) setHint('選んだよ。動かすなら長押し、または下のボタン', 4000); }
+function select(id) { ui.sel = id; markDirty(); if (id) setHint('選んだよ。動かすなら長押し、または下のボタン', 4000); }
 function beginLift(id) {
   const b = S.blds.find(q => q.id === id); if (!b) return;
   enterMode('move');
@@ -1521,7 +1618,7 @@ function beginLift(id) {
   showAction(ITEMS[b.type].name + 'をもちあげたよ。行き先のマスをタップ', '', false);
   actionbar.classList.add('lifted');
   if (navigator.vibrate) navigator.vibrate(25);
-  dirty = true;
+  markDirty();
 }
 function startMoveFor(id) {
   enterMode('move'); const b = S.blds.find(q => q.id === id); if (!b) return;
@@ -1545,7 +1642,7 @@ function onTap(px, py) {
       setGhost(tile); break;
     case 'move':
       if (ui.lifted && ui.moveId) {
-        if (!tile) { ui.badAt = performance.now(); toast('土地の中をタップしてね'); dirty = true; break; }
+        if (!tile) { ui.badAt = performance.now(); toast('土地の中をタップしてね'); markDirty(); break; }
         setGhost(tile);
         if (ui.ghost.same) { enterMode('explore'); setHint('もとの場所にもどしたよ', 2200); break; }     // tapping where it already stands cancels
         if (ui.ghost.ok) confirmAction();
@@ -1573,7 +1670,7 @@ function onTap(px, py) {
  * destination moves it); a short tap only selects. Moving past HOLD_SLOP, lifting early, a second finger,
  * pointercancel (the browser took over for scrolling/gestures), blur and scroll all cancel the pending lift. */
 let down = null;
-function clearHold() { if (down && down.timer) { clearTimeout(down.timer); down.timer = 0; } if (ui.hold) { ui.hold = null; dirty = true; } }
+function clearHold() { if (down && down.timer) { clearTimeout(down.timer); down.timer = 0; } if (ui.hold) { ui.hold = null; markDirty(); } }
 canvas.addEventListener('pointerdown', e => {
   if (down && down.id !== e.pointerId) { clearHold(); down = null; return; }           // second finger: abandon
   down = {x: e.clientX, y: e.clientY, t: performance.now(), id: e.pointerId, fired: false, timer: 0};
@@ -1581,7 +1678,7 @@ canvas.addEventListener('pointerdown', e => {
   if (ui.mode === 'explore' && !ui.lifted && $('modal').hidden) {
     const hit = hitBuilding(e.clientX, e.clientY);
     if (hit) {
-      ui.hold = {id: hit.id, t0: performance.now()}; dirty = true;
+      ui.hold = {id: hit.id, t0: performance.now()}; markDirty();
       const d = down;
       d.timer = setTimeout(() => { d.timer = 0; if (down === d) { d.fired = true; ui.hold = null; beginLift(hit.id); } }, LONG_PRESS_MS);
     }
@@ -1597,7 +1694,12 @@ canvas.addEventListener('pointerup', e => {
 canvas.addEventListener('pointercancel', () => { clearHold(); down = null; });
 canvas.addEventListener('contextmenu', e => e.preventDefault());
 ['blur', 'scroll'].forEach(n => window.addEventListener(n, () => { clearHold(); down = null; }, true));
-document.addEventListener('visibilitychange', () => { clearHold(); down = null; if (document.hidden && ui.lifted) enterMode('explore'); });
+document.addEventListener('visibilitychange', () => {
+  clearHold(); down = null;
+  if (document.hidden) { if (rafId) { cancelAnimationFrame(rafId); rafId = 0; } if (ui.lifted) enterMode('explore'); }
+  else { last = 0; lastDrawAt = 0; markDirty(); }
+});
+['pointerdown', 'pointermove', 'keydown'].forEach(n => window.addEventListener(n, wake, {passive: true, capture: true}));
 canvas.addEventListener('pointermove', e => {
   if (down && down.id === e.pointerId && !down.fired && Math.hypot(e.clientX - down.x, e.clientY - down.y) > HOLD_SLOP) clearHold();   // finger drifted: not a long press
   if (e.pointerType !== 'mouse' || e.buttons) return;               // mouse hover preview
@@ -1635,7 +1737,7 @@ $('sheetClose').addEventListener('click', () => enterMode('explore'));
 $('actionOk').addEventListener('click', confirmAction);
 $('actionCancel').addEventListener('click', () => {
   if (ui.lifted) { enterMode('explore'); setHint('もとに戻したよ', 2200); return; }       // cancel a long-press move: nothing changed
-  ui.ghost = null; hideAction(); dirty = true;
+  ui.ghost = null; hideAction(); markDirty();
   if (ui.mode === 'move') { ui.moveId = null; setHint('動かしたい建物をタップ'); } else setHint(ui.buildType ? ITEMS[ui.buildType].name + '：置きたい場所をタップ' : '');
 });
 $('modalOk').addEventListener('click', () => { const id = Number($('modal').dataset.id); $('modal').hidden = true; doStore(id); if (ui.mode !== 'store') { ui.sel = null; } });
@@ -1650,7 +1752,7 @@ window.addEventListener('orientationchange', () => setTimeout(resize, 200));
 updateHUD(); setPressed();
 resize();
 setHint('建物を長押しすると、もちあげて動かせるよ', 7000);
-requestAnimationFrame(frame);
+wake();
 
 // Small read-only-ish hook so automated checks can exercise the rules (in-memory only).
 window.KVDemo = {S, ui, ITEMS, canPlace, visualConflict, silhouette, beginLift, enterMode, onTap, study: k => study(k, document.body), doExpand, tileCenter: (x, y) => curP()(x + .5, y + .5), setGhost, confirmAction, doStore, askStore, wild, wildVisible, clearDist, snap: () => { snapView(); }};

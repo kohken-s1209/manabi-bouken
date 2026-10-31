@@ -147,3 +147,5 @@ button:focus-visible{outline:3px solid #2b7bd0;outline-offset:2px}
   .sheet,.fabs,.hint{transition:none}
   .float{animation-duration:.01s}
 }
+/* opt-in diagnostics (?perf=1): created by app.js only when the flag is present; shows no user data */
+.perf{position:fixed;left:6px;bottom:calc(var(--bar-h,64px) + 6px);z-index:50;max-width:calc(100vw - 12px);padding:3px 7px;border-radius:6px;background:rgba(0,0,0,.62);color:#e8ffd0;font:11px/1.3 ui-monospace,monospace;pointer-events:none;writing-mode:horizontal-tb}
