@@ -11,6 +11,16 @@ Files: `index.html`, `style.css`, `app.js` (plus this README). `IMPLEMENTATION_B
 - Study rewards are **simulated** — buttons just add currency in this page. Nothing is recorded anywhere.
 - Nothing outside `storybook-demo/` was touched.
 
+## v5 changes (from `V5_FEEDBACK.md`) — smartphone performance
+**Verification status — read first:** written by reading only. The sandbox did not allow running Node or a browser (`node --check` required approval that was not granted), so syntax, behaviour and the actual frame-time gain are **unverified and unmeasured**. Run `node --check storybook-demo/app.js`, open with `?perf=1` on an Android phone and compare against v4 before relying on this.
+
+1. **No full world redraw per frame.** Ground (meadow, stream, road) and all scenery that no building can overlap are painted once into a cached offscreen layer, then blitted. The cache signature is: viewport size, DPR, usable area, camera (zoom/pan), land size, expand-preview state, and every building's id/type/position — so it is rebuilt on resize, expansion, build/move/store/undo. Animation ticks never rebuild it. While the camera eases or the expand effect runs, the scene is painted live in the original layer order, then re-cached on settle.
+2. **Event-driven loop.** `requestAnimationFrame` is requested only when something is dirty, the camera/grid/effects/long-press ring animate, a pulsing highlight is shown (~30 fps), or for ambient motion (clouds, leaves; ~15 fps) which stops 8 s after the last interaction. Nothing runs while the tab is hidden; `prefers-reduced-motion` has no ambient or pulsing redraws at all. Trade-off: the cached stream/waterfall is a calm frozen state (no flowing dashes).
+3. **No per-frame O(n²) sort.** Scenery is sorted once at start (point objects). Only scenery whose painted box touches a building (or is marked for the next expansion) is depth-sorted, with the buildings, by the existing footprint-based topological sort (n is small). The sorted list is cached with the static layer, so building overlap/draw order and hit-testing are unchanged.
+4. **Render resolution.** DPR is capped at 1.25 on phones / 1.5 elsewhere and limited by a ~1.5 MP pixel budget. Sprite and tray-thumbnail DPR follow the cap. The vignette gradient and foreground placement list are cached.
+5. **`?perf=1`** shows a small local overlay: fps, average draw ms, canvas size @DPR, cache rebuild count. Hidden otherwise; nothing is stored or sent.
+6. Unchanged: stage counts 16/25/36/49/64, forest retreat, meadow, resources, placement/collision (tile footprint + painted box + silhouette), long-press lift → destination tap → cancel, grid only while editing, dialog fixes, no storage/network.
+
 ## v4 changes (from `V4_FEEDBACK.md`)
 **Verification status — read first:** this change was written and re-read by hand only. The sandbox did not allow running Node or Chromium (both required approval that was not granted), so `node --check`, a headless run, screenshots and the 360×800 / 390×850 dialog checks were **not** done. Nothing below has been observed running. Run the QA list in `V4_FEEDBACK.md` in a real browser before relying on it; expect tuning (pads, tree density, camera fit).
 
