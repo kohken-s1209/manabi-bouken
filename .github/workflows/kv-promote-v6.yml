@@ -1,0 +1,41 @@
+name: Promote Knowledge Village v6 candidate to review branch
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/kv-promote-v6.yml
+permissions:
+  contents: write
+  actions: read
+jobs:
+  deliver-v6:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v6
+      - name: Retrieve exact verified candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/kv-v6
+          gh run download 41191694025 -R kohken-s1209/manabi-bouken -n kv-storybook-v6-candidate -D /tmp/kv-v6
+      - name: Validate only four standalone files and publish review branch
+        run: |
+          set -euo pipefail
+          test "$(find /tmp/kv-v6 -type f | wc -l)" -eq 4
+          test "$(find /tmp/kv-v6 -type l | wc -l)" -eq 0
+          for f in index.html style.css app.js README.md; do
+            test -f "/tmp/kv-v6/$f"
+            test "$(wc -c < "/tmp/kv-v6/$f")" -lt 280000
+          done
+          node --check /tmp/kv-v6/app.js
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch -c demo/kv-storybook-v6
+          cp /tmp/kv-v6/{index.html,style.css,app.js,README.md} storybook-demo/
+          git add -- storybook-demo/index.html storybook-demo/style.css storybook-demo/app.js storybook-demo/README.md
+          git diff --cached --check
+          test "$(git diff --cached --name-only | wc -l)" -ge 1
+          git commit -m 'Update isolated Knowledge Village storybook demo to v6'
+          git push origin HEAD:refs/heads/demo/kv-storybook-v6
