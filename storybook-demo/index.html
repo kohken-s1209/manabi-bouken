@@ -9,7 +9,7 @@
 </head>
 <body>
 <div id="app">
-  <canvas id="scene" role="img" aria-label="森と滝と小川に囲まれた、赤い屋根の家がある絵本風の村"></canvas>
+  <canvas id="scene" role="img" aria-label="森を切り開いた草地に赤い屋根の家がある絵本風の村。土地を広げると森が後ろへ下がります"></canvas>
 
   <header class="hud">
     <div class="logo">
@@ -75,6 +75,7 @@
 
   <div id="toast" class="toast" role="status" aria-live="polite" hidden><span id="toastText"></span><button id="toastUndo" type="button" hidden>元にもどす</button></div>
 
+  <!-- the only dialog in the page: opening it hides the shop sheet, placement bar, toast and chips -->
   <div id="modal" class="modal" hidden>
     <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="modalTitle" aria-describedby="modalText">
       <h3 id="modalTitle"></h3>

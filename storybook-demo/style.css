@@ -59,11 +59,12 @@ button:focus-visible{outline:3px solid #2b7bd0;outline-offset:2px}
 
 /* ---------- action bar / sheet ---------- */
 .actionbar{position:absolute;left:calc(var(--sal) + 8px);right:calc(var(--sar) + 8px);margin:0 auto;width:fit-content;max-width:min(560px,calc(100% - 16px));
-  bottom:calc(var(--above) + 8px);z-index:6;display:flex;align-items:center;gap:8px;
-  padding:6px 8px 6px 14px;border-radius:24px;background:var(--cream);border:2.5px solid var(--edge);box-shadow:0 5px 12px rgba(60,40,15,.35);
-  font-weight:800;font-size:13.5px;line-height:1.4;writing-mode:horizontal-tb}
-.actionbar span{flex:1 1 9em;min-width:9em;white-space:normal;overflow-wrap:break-word;line-break:strict}
-.actionbar .ok,.actionbar .cancel{flex:none;min-width:68px;padding:0 12px}
+  bottom:calc(var(--above) + 8px);z-index:6;display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:6px 8px;
+  padding:8px 10px;border-radius:24px;background:var(--cream);border:2.5px solid var(--edge);box-shadow:0 5px 12px rgba(60,40,15,.35);
+  font-weight:800;font-size:13.5px;line-height:1.45;writing-mode:horizontal-tb}
+/* the message needs >= ~200px of line length: if the buttons do not fit beside it they drop to their own row */
+.actionbar span{flex:1 1 200px;min-width:min(200px,100%);white-space:normal;overflow-wrap:break-word;line-break:strict;writing-mode:horizontal-tb}
+.actionbar .ok,.actionbar .cancel{flex:1 1 84px;min-width:84px;max-width:140px;padding:0 12px}
 .ok,.cancel{min-height:44px;min-width:76px;border-radius:999px;border:2px solid;font-weight:900;padding:0 16px}
 .ok{background:linear-gradient(#a6dd72,#6cae4f);border-color:#4b8a38;color:#fff;text-shadow:0 1px 0 #3a6f2a}
 .actionbar.lifted{border-color:#e0a63a;background:linear-gradient(#fffbe8,#ffeeb8)}
@@ -102,17 +103,21 @@ button:focus-visible{outline:3px solid #2b7bd0;outline-offset:2px}
 
 /* ---------- toast / modal / floaters ---------- */
 .toast{position:absolute;left:calc(var(--sal) + 8px);right:calc(var(--sar) + 8px);margin:0 auto;width:fit-content;max-width:min(520px,calc(100% - 16px));
-  bottom:var(--toast-b,calc(var(--above) + 70px));z-index:8;display:flex;align-items:center;gap:10px;writing-mode:horizontal-tb;
-  padding:8px 10px 8px 16px;border-radius:20px;background:rgba(74,52,30,.92);color:#fff8e6;font-weight:800;font-size:13.5px;line-height:1.4;box-shadow:0 5px 12px rgba(0,0,0,.3)}
-.toast span{min-width:8em;white-space:normal;overflow-wrap:break-word;line-break:strict}
+  bottom:var(--toast-b,calc(var(--above) + 70px));z-index:8;display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:6px 10px;writing-mode:horizontal-tb;
+  padding:8px 12px 8px 16px;border-radius:20px;background:rgba(74,52,30,.92);color:#fff8e6;font-weight:800;font-size:13.5px;line-height:1.45;box-shadow:0 5px 12px rgba(0,0,0,.3)}
+.toast span{flex:1 1 180px;min-width:min(180px,100%);white-space:normal;overflow-wrap:break-word;line-break:strict;writing-mode:horizontal-tb}
 .toast button{flex:none;min-height:36px;padding:0 12px;border-radius:999px;border:0;background:#ffe08a;color:#5a4128;font-weight:900}
-.modal{position:absolute;inset:0;z-index:10;display:flex;align-items:center;justify-content:center;background:rgba(40,30,15,.4);
+/* Modal root cause hardening: the overlay is a grid whose single cell is as wide as the viewport minus padding, and the dialog
+ * gets an explicit inline size (never a % of something that can shrink-wrap) plus a minimum, in horizontal writing mode.
+ * Nothing in here can be squeezed into a one-character column, and the dialog can never be taller than the screen. */
+.modal{position:fixed;inset:0;z-index:20;display:grid;place-items:center;background:rgba(40,30,15,.4);
   padding:calc(var(--sat) + 12px) calc(var(--sar) + 12px) calc(var(--sab) + 12px) calc(var(--sal) + 12px);overflow:auto}
-/* Dialog: fixed horizontal writing mode, a width that survives 360px phones, scrolls instead of overflowing the screen. */
-.dialog{flex:0 1 auto;width:min(100%,340px);max-height:100%;overflow:auto;padding:16px 16px 14px;border-radius:22px;background:var(--cream);border:3px solid var(--edge);
+.dialog{box-sizing:border-box;inline-size:min(calc(100vw - 24px),360px);min-inline-size:min(260px,calc(100vw - 24px));max-block-size:calc(100dvh - 24px - var(--sat) - var(--sab));
+  overflow:auto;padding:18px 18px 16px;border-radius:22px;background:var(--cream);border:3px solid var(--edge);
   box-shadow:0 10px 30px rgba(0,0,0,.4);text-align:center;writing-mode:horizontal-tb;text-orientation:mixed;direction:ltr}
-.dialog h3{margin:0 0 8px;font-size:17px;line-height:1.35;white-space:normal;overflow-wrap:break-word;line-break:strict}
-.dialog p{margin:0 0 14px;font-size:14px;line-height:1.65;color:var(--ink2);font-weight:700;text-align:left;white-space:normal;word-break:normal;overflow-wrap:break-word;line-break:strict}
+.dialog h3,.dialog p{box-sizing:border-box;inline-size:100%;min-inline-size:0;writing-mode:horizontal-tb;text-orientation:mixed;white-space:normal;word-break:normal;overflow-wrap:break-word;line-break:strict}
+.dialog h3{margin:0 0 8px;font-size:17px;line-height:1.4}
+.dialog p{margin:0 0 14px;font-size:14px;line-height:1.7;color:var(--ink2);font-weight:700;text-align:left}
 .dialog-btns{display:flex;flex-wrap:wrap;gap:10px;justify-content:center}
 .dialog-btns button{flex:1 1 120px;min-width:0;padding:0 12px}
 .float{position:absolute;z-index:9;pointer-events:none;font-weight:900;font-size:18px;color:#fff;text-shadow:0 2px 0 #7a5a2c,0 0 6px #7a5a2c;animation:floatUp 1.4s ease-out forwards}
