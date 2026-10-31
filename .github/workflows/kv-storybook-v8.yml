@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v8
+      - uses: actions/checkout@v4
         with: {persist-credentials: false}
       - name: Build improved standalone demo
         uses: anthropics/claude-code-action@v1
@@ -49,7 +49,7 @@ jobs:
           node --check storybook-demo/app.js
           mkdir -p kv-v8-artifact
           cp storybook-demo/{index.html,style.css,app.js,README.md} kv-v8-artifact/
-      - uses: actions/upload-artifact@v8
+      - uses: actions/upload-artifact@v4
         with:
           name: kv-storybook-v8-candidate
           path: kv-v8-artifact/
