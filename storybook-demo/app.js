@@ -28,6 +28,25 @@ const ITEMS = {
 const RES_ICON = {wood: '🪵', books: '📚', globe: '🌍'};
 const SKILL_NEED = 2;               // study each required subject this many times to unlock
 
+/* ---- Cross-river world (v6) ----
+ * The river is a fixed feature of the WORLD grid (it runs at gx ~ -1, west of every possible plot) instead of a
+ * decoration that hugs the plot. The plot grows toward it. When the land reaches 7x7 (49 tiles) a footbridge opens
+ * and a far-bank meadow of 3 x 4..5 real, buildable cells appears on the other side. Far-bank cells use the same
+ * placement, collision, hit-testing and move rules as the plot (inLand() below is the single source of truth).
+ * Water cells and bridge cells are never part of the land, so nothing can be built in the river or on the bridge. */
+const FAR_FROM = 7;                                   // land size that opens the bridge + far bank
+const BRIDGE = {x0: -2, x1: 0, y: 2};                 // deck: cells (-2,2) and (-1,2), joining plot column 0 to far-bank column -3
+const farBank = n => n >= FAR_FROM ? {x0: -5, x1: -2, y0: 1, y1: n >= 8 ? 6 : 5} : null;     // 3 x 4 (12 cells), then 3 x 5 (15 cells)
+const riverGX = gy => -1 + (gy < 0 ? -Math.pow(-gy, 1.5) * .9 : 0) + .12 * Math.sin(gy * .8 + .6);   // river centre line gx(gy): bends away to the NW upstream
+
+/* ---- Quality / performance mode ----
+ * "fast" (default on phones, coarse pointers and low-memory / few-core devices): 1x canvas, no ambient clouds/leaves,
+ * fewer low plants and meadow tufts. "rich" (desktop): up to 1.5x and gentle ambient motion. Override with ?quality=fast|rich. */
+const QUALITY_PARAM = ((location.search.match(/[?&]quality=(fast|rich)/) || [])[1]) || '';
+const FAST = QUALITY_PARAM ? QUALITY_PARAM === 'fast' : (
+  (window.matchMedia && window.matchMedia('(pointer:coarse)').matches) || Math.min(window.innerWidth, window.innerHeight) < 700 ||
+  (navigator.deviceMemory && navigator.deviceMemory <= 4) || (navigator.hardwareConcurrency && navigator.hardwareConcurrency <= 4));
+
 const S = {
   n: N_MIN, wood: 28, books: 0, globe: 0, points: 0,
   skills: {math: 0, japanese: 0, english: 0},
@@ -66,15 +85,19 @@ function circle(ctx, x, y, r, fill) { ctx.beginPath(); ctx.arc(x, y, r, 0, 6.283
  * 3. Canvas, view and projection
  * ==================================================================== */
 const canvas = $('scene');
-const mainCtx = canvas.getContext('2d');
-let ctx = mainCtx;                    // drawing helpers use `ctx`; it is pointed at the cached static layer while that is rebuilt
+const mainCtx = canvas.getContext('2d', {alpha: false});
+let ctx = mainCtx;                    // drawing helpers use `ctx`; it is pointed at an offscreen layer while that layer is rebuilt
 const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 let W = 0, H = 0, dpr = 1, bg = null, bgPrev = null, bgFade = 0, T = 0;
 const stageOf = n => n - N_MIN;      // 0..4 : 16 / 25 / 36 / 49 / 64 tiles
-const sprites = new Map();            // cached tree / bush bitmaps (static art, drawn many times per frame)
-const view = {tw: 60, cx: 0, cy: 0, c: 4, lo: 2, hi: 6};
-const tgt = {tw: 60, cx: 0, cy: 0, c: 4, lo: 2, hi: 6};
-let gridA = 0, area = {top: 120, bottom: 600};
+const sprites = new Map();            // sprite atlas: tree / bush / rock / stump / flower bitmaps (kind x variant x size bucket)
+let spriteBytes = 0;
+const bsprites = new Map();           // one cached bitmap per building type for the current base zoom
+let bsKey = '';
+const view = {tw: 60, cx: 0, cy: 0, c: 4, lo: 2, hi: 6};    // LIVE camera (moves a little while a sheet opens; cached images are just scaled)
+const tgt = {tw: 60, cx: 0, cy: 0, c: 4, lo: 2, hi: 6};     // where the live camera is heading
+const bview = {tw: 60, cx: 0, cy: 0, c: 4, lo: 2, hi: 6};   // BASE camera the cached ground layer is painted for (changes only with land size / viewport)
+let gridA = 0, area = {top: 120, bottom: 600}, areaLive = {top: 120, bottom: 600};
 
 function makeP(tw, cx, cy, c) {
   const th = tw / 2;
@@ -82,19 +105,21 @@ function makeP(tw, cx, cy, c) {
 }
 const curP = () => makeP(view.tw, view.cx, view.cy, view.c);
 
-function computeTarget() {
-  const n = S.n, lo = loOf(n), ah = Math.max(120, area.bottom - area.top);
-  // The camera is sized so the *clearing* (plot + meadow pad) fills a fixed share of the width. That share grows with
-  // the land, so early on a ring of forest stays visible beside the plot and later the meadow runs off the screen.
-  const st = n - N_MIN, half = n / 2 + clearPad(st) * .8;
+/* Fits the whole clearing (plot + meadow pad, and the far bank once it exists) into [top,bottom]. */
+function fitView(top, bottom, o) {
+  const n = S.n, lo = loOf(n), ah = Math.max(120, bottom - top), fb = farBank(n);
+  // The camera is sized so the *clearing* fills a fixed share of the width. That share grows with the land, so early on a
+  // ring of forest stays visible beside the plot and later the meadow runs off the screen. The far bank adds width on the left.
+  const st = n - N_MIN, uL = fb ? Math.max(n, -fb.x0 + fb.y1) : n, half = (uL + n) / 4 + clearPad(st) * .8;
   const twW = W * lerp(.34, .62, st / 4) / half;
   const twH = ah * 0.88 / (n / 2 + 1.5);
-  tgt.tw = clamp(Math.min(twW, twH), 24, 170);
-  tgt.cx = W / 2;
-  tgt.c = lo + n / 2; tgt.lo = lo; tgt.hi = lo + n;
-  const total = tgt.tw * (n / 2 + 1.4);
-  tgt.cy = area.top + (ah - total) / 2 + tgt.tw * 1.1 + n * tgt.tw / 4;
+  o.tw = clamp(Math.min(twW, twH), 24, 170);
+  o.cx = W / 2 + (uL - n) * o.tw / 4;
+  o.c = lo + n / 2; o.lo = lo; o.hi = lo + n;
+  const total = o.tw * (n / 2 + 1.4);
+  o.cy = top + (ah - total) / 2 + o.tw * 1.1 + n * o.tw / 4;
 }
+function computeTarget() { fitView(area.top, area.bottom, bview); fitView(area.top, areaLive.bottom, tgt); }
 function snapView() { computeTarget(); Object.assign(view, tgt); }
 
 function layout() {
@@ -111,29 +136,32 @@ function layout() {
   const hud = document.querySelector('.hud');
   const hudB = hud.getBoundingClientRect().bottom;
   root.setProperty('--hud-h', hudB + 'px');
-  // reserve hint/action-bar space up front so the map never shifts under a tapping finger
+  // The BASE camera (what the cached ground layer is painted for) ignores sheets and bars, so opening the shop, the study
+  // sheet or the placement bar never invalidates a cache. Only the live camera follows them, by moving / scaling the cached image.
   const placing = ui.mode === 'build' || ui.mode === 'move';
-  area.top = hudB + 44;
-  area.bottom = window.innerHeight - barH - sheetH - (placing ? 78 : 0) - 6;
+  area.top = hudB + 44; areaLive.top = area.top;
+  area.bottom = window.innerHeight - barH - 6;
+  areaLive.bottom = window.innerHeight - barH - sheetH - (placing ? 78 : 0) - 6;
   computeTarget();
-  wake();                                // the camera target may have changed: let the loop ease toward it
+  wake();                                // the live camera target may have changed: let the loop ease toward it
 }
-/* Render resolution: phones are capped at 1.25x, larger screens at 1.5x, and a pixel budget keeps the backing store
- * (and the three full-screen cached layers) small. Text is DOM, so the lower canvas scale does not blur it. */
+/* Render resolution. "fast" mode always renders at 1x and lets CSS scale the canvas (text is DOM, so it stays sharp);
+ * "rich" mode allows up to 1.5x inside a pixel budget. Every full-screen layer below uses this same backing size. */
 function pickDpr(w, h) {
-  const phone = Math.min(w, h) < 700 || (window.matchMedia && window.matchMedia('(pointer:coarse)').matches);
-  const cap = phone ? 1.25 : 1.5, budget = 1.5e6;
+  const cap = FAST ? 1 : 1.5, budget = FAST ? 1e6 : 2.2e6;
   return Math.max(1, Math.min(window.devicePixelRatio || 1, cap, Math.sqrt(budget / Math.max(1, w * h))));
 }
+function makeLayer() { const c = document.createElement('canvas'); c.width = Math.round(W * dpr); c.height = Math.round(H * dpr); return {cv: c, g: c.getContext('2d')}; }
 function resize() {
   W = window.innerWidth; H = window.innerHeight;
   dpr = pickDpr(W, H);
   canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
-  stat = null; vgGrad = null;
-  sprites.clear();
+  stat = null; trans = null; tcv = null; ordSig = ''; sprites.clear(); spriteBytes = 0; bsprites.clear(); bsKey = '';
   bg = buildBackdrop(W, H, dpr, stageOf(S.n)); bgPrev = null; bgFade = 0;
   layout(); snapView(); markDirty();
 }
+let resizeTimer = 0;
+const resizeSoon = () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(resize, 180); };     // mobile address-bar show/hide fires many resizes
 
 /* tile <-> screen */
 function screenToGrid(px, py) {
@@ -145,7 +173,13 @@ function tileAt(px, py) {
   const x = Math.floor(gx), y = Math.floor(gy);
   return inLand(x, y) ? {x, y} : null;
 }
-function inLand(x, y) { const lo = loOf(S.n); return x >= lo && x < lo + S.n && y >= lo && y < lo + S.n; }
+function landCell(x, y, n) {
+  const lo = loOf(n);
+  if (x >= lo && x < lo + n && y >= lo && y < lo + n) return true;
+  const f = farBank(n);
+  return !!f && x >= f.x0 && x < f.x1 && y >= f.y0 && y < f.y1;
+}
+function inLand(x, y) { return landCell(x, y, S.n); }
 
 /* ======================================================================
  * 4. Art — trees, bushes, rocks (procedural, original)
@@ -246,17 +280,26 @@ function drawCloud(c, x, y, s) {
 
 /* Trees and bushes are static, so they are rendered once into small bitmaps (size bucketed so the zoom animation
  * does not create a new bitmap every frame) and blitted. This keeps a dense forest affordable on phones. */
+/* v6: one atlas for every plant / rock / stump. Sizes snap to a geometric ladder (x1.2) and seeds to 3 variants, so a
+ * forest of hundreds of objects shares a few dozen bitmaps; sprites survive stage changes (only a resize clears them). */
+const SPR_DIM = {tree: [1.15, 1.3], bush: [1.8, 1], rock: [.95, .6], stump: [.95, .55], flower: [1.25, .62]};
+const SPR_VARIANTS = 3;
 function drawSprite(c, type, kind, seed, x, y, s, alpha) {
-  const q = Math.max(12, Math.round(s / 6) * 6), key = type + kind + '|' + seed + '|' + q + '|' + dpr;
+  const q = Math.max(12, Math.round(Math.exp(Math.round(Math.log(Math.max(1, s)) / .1823) * .1823))), v = type === 'rock' || type === 'stump' ? 0 : seed % SPR_VARIANTS;
+  kind = type === 'tree' ? kind : type === 'bush' ? (kind === 1 ? 1 : 4) : 0;       // bushes only have two palettes; rocks / stumps / flowers none
+  const key = type + kind + '|' + v + '|' + q;
   let e = sprites.get(key);
   if (!e) {
-    if (sprites.size > 320) sprites.clear();
-    const w = Math.ceil(type === 'tree' ? q * 1.15 : q * 1.8), h = Math.ceil(type === 'tree' ? q * 1.25 : q * .95);
+    const d = SPR_DIM[type], w = Math.ceil(q * d[0]), h = Math.ceil(q * d[1]);
     const cv = document.createElement('canvas'); cv.width = Math.ceil(w * dpr); cv.height = Math.ceil(h * dpr);
     const g = cv.getContext('2d'); g.scale(dpr, dpr);
-    const ax = w / 2, ay = h - q * .1;
-    if (type === 'tree') drawTree(g, ax, ay, q, kind, seed); else drawBush(g, ax, ay, q, kind, seed);
-    e = {cv, w, h, ax, ay, q}; sprites.set(key, e);
+    const ax = w / 2, ay = h - q * .14;
+    if (type === 'tree') drawTree(g, ax, ay, q, kind, v + 1);
+    else if (type === 'bush') drawBush(g, ax, ay, q, kind, v + 1);
+    else if (type === 'rock') drawRock(g, ax, ay, q);
+    else if (type === 'stump') drawStump(g, ax, ay, q);
+    else drawFlowerPatch(g, ax, ay, q, v + 1);
+    e = {cv, w, h, ax, ay, q}; sprites.set(key, e); spriteBytes += cv.width * cv.height * 4;
   }
   const k = s / e.q;
   if (alpha != null && alpha < 1) { const pa = c.globalAlpha; c.globalAlpha = pa * Math.max(0, alpha); c.drawImage(e.cv, x - e.ax * k, y - e.ay * k, e.w * k, e.h * k); c.globalAlpha = pa; }
@@ -321,7 +364,7 @@ function buildBackdrop(w, h, ratio, stage) {
     const gg = fr.createRadialGradient(x, y, 0, x, y, rad); gg.addColorStop(0, 'rgba(255,250,190,.28)'); gg.addColorStop(1, 'rgba(255,250,190,0)');
     fr.fillStyle = gg; fr.fillRect(x - rad, y - rad, rad * 2, rad * 2);
   }
-  const blades = Math.round(w * h / 420);
+  const blades = Math.round(w * h / (FAST ? 900 : 420));
   for (let i = 0; i < blades; i++) {
     const x = r() * w, y = hy + r() * (h - hy), s = 2 + (y / h) * 6;
     fr.strokeStyle = r() < .5 ? 'rgba(70,140,60,.35)' : 'rgba(190,230,110,.4)'; fr.lineWidth = 1;
@@ -341,7 +384,7 @@ function buildBackdrop(w, h, ratio, stage) {
     for (let x = -sz * .5; x < w + sz; x += step) {
       const kind = pickKind(rr());
       const jitter = (rr() - .5) * step * .5;
-      drawTree(fr, x + jitter, base + (rr() - .5) * h * .01, sz * (.85 + rr() * .3), kind, Math.floor(rr() * 1000));
+      drawSprite(fr, 'tree', kind, Math.floor(rr() * 1000), x + jitter, base + (rr() - .5) * h * .01, sz * (.85 + rr() * .3));    // atlas sprite: not a fresh vector tree
     }
     // meadow tuft line between rows for depth
     const gg = fr.createLinearGradient(0, base, 0, base + h * .03); gg.addColorStop(0, 'rgba(120,180,80,0)'); gg.addColorStop(1, 'rgba(150,205,90,.55)');
@@ -354,9 +397,11 @@ function buildBackdrop(w, h, ratio, stage) {
     const xl = -sz * .1 + side() * sz * .2 - st * sz * .14, kl = pickKind(side());
     const xr = w + sz * .1 - side() * sz * .2 + st * sz * .14, kr = pickKind(side());
     if (i >= 6 - st) continue;        // random draws above stay in sequence, so the surviving trees never change
-    drawTree(fr, xl, y, sz, kl, 900 + i);
-    drawTree(fr, xr, y + h * .03, sz, kr, 950 + i);
+    drawSprite(fr, 'tree', kl, 900 + i, xl, y, sz);
+    drawSprite(fr, 'tree', kr, 950 + i, xr, y + h * .03, sz);
   }
+  // fast mode: sky and far layers are flattened into ONE image (clouds are not animated there), so the backdrop is a single blit
+  if (FAST) { sk.drawImage(farC, 0, 0, w, h); return {sky: skyC, far: null}; }
   return {sky: skyC, far: farC};
 }
 function farCottage(c, x, y, s) {
@@ -377,38 +422,29 @@ function pickKind(v) { return v < .56 ? 0 : v < .68 ? 1 : v < .82 ? 2 : v < .91 
 /* ======================================================================
  * 6. Water — waterfall cliff, pool and stream (hugs the land plot)
  * ==================================================================== */
-let streamPts = [];
+let streamPts = [], bridgePts = [];
+/* The river is sampled from the WORLD curve riverGX(gy) and projected with the base camera, so it is the same river at
+ * every size: the plot grows toward it and (from 49 tiles) a bridge crosses it. Samples double as the keep-out line for scenery. */
 function drawWater(P) {
-  const tw = view.tw, th = tw / 2, r = (view.hi - view.lo) / 2, cx = view.cx, cy = view.cy;
-  const Lx = cx - r * tw, Ty = cy - r * th;
-  const eBL = f => [cx - f * r * tw, Ty + f * r * th], eFL = f => [Lx + f * r * tw, cy + f * r * th];
-  const n1 = [-.447, -.894], n2 = [-.447, .894];
-  const add = (p, n, d) => [p[0] + n[0] * d * tw, p[1] + n[1] * d * tw];
-  const minX = W * 0.035;
-  let pts = [add(eBL(.38), n1, 1.05), add(eBL(.82), n1, .95), [Lx - tw * .95, cy], add(eFL(.3), n2, 1.0), add(eFL(.72), n2, 1.15)];
-  const last = pts[4];
-  pts.push([last[0] + tw * .35, last[1] + tw * 1.2], [last[0] + tw * .8, H + tw]);
-  pts = pts.map(p => [Math.max(minX, p[0]), p[1]]);
-  const wdt = clamp(tw * .5, 14, 70);
-  // sample smooth path
-  const path = new Path2D();
-  const mid = (a, b) => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
-  path.moveTo(pts[0][0], pts[0][1]);
-  streamPts = [];
-  let prev = pts[0];
-  for (let i = 1; i < pts.length - 1; i++) {
-    const m = mid(pts[i], pts[i + 1]);
-    path.quadraticCurveTo(pts[i][0], pts[i][1], m[0], m[1]);
-    for (let k = 1; k <= 6; k++) {
-      const t = k / 6, a = 1 - t;
-      streamPts.push([a * a * prev[0] + 2 * a * t * pts[i][0] + t * t * m[0], a * a * prev[1] + 2 * a * t * pts[i][1] + t * t * m[1]]);
-    }
-    prev = m;
+  const tw = view.tw;
+  const wdt = clamp(tw * .46, 12, 62);
+  const ch = Math.max(tw * 1.9, H * .13), cw = tw * 1.5, yMin = area.top + ch + 10;
+  const pts = [];
+  for (let gy = -9; gy <= 26; gy += .25) {
+    const p = P(riverGX(gy), gy);
+    if (p[1] < yMin) continue;
+    pts.push(p);
+    if (p[1] > H + tw) break;
   }
+  if (pts.length < 4) { streamPts = []; return; }
+  const path = new Path2D();
+  path.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length - 1; i++) path.quadraticCurveTo(pts[i][0], pts[i][1], (pts[i][0] + pts[i + 1][0]) / 2, (pts[i][1] + pts[i + 1][1]) / 2);
   path.lineTo(pts[pts.length - 1][0], pts[pts.length - 1][1]);
+  streamPts = pts.slice();
 
   // cliff + waterfall at the stream source
-  const p0 = pts[0], ch = Math.max(tw * 1.9, H * .13), cw = tw * 1.5, top = p0[1] - ch;
+  const p0 = pts[0], top = p0[1] - ch;
   ctx.save();
   const rock = ctx.createLinearGradient(p0[0] - cw / 2, 0, p0[0] + cw / 2, 0);
   rock.addColorStop(0, '#a79b83'); rock.addColorStop(.55, '#8c8068'); rock.addColorStop(1, '#6f6652');
@@ -441,14 +477,14 @@ function drawWater(P) {
   ctx.setLineDash([]);
   ctx.restore();
   // trees on the cliff top
-  drawTree(ctx, p0[0] - cw * .3, top + ch * .1, tw * 1.3, 4, 31);
-  drawTree(ctx, p0[0] + cw * .36, top + ch * .12, tw * 1.05, 0, 32);
+  drawSprite(ctx, 'tree', 4, 1, p0[0] - cw * .3, top + ch * .1, tw * 1.3);
+  drawSprite(ctx, 'tree', 0, 2, p0[0] + cw * .36, top + ch * .12, tw * 1.05);
 
   // stream body
   ctx.save();
   ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-  ctx.strokeStyle = '#6a8f3f'; ctx.lineWidth = wdt + 10; ctx.stroke(path);              // grassy bank
-  ctx.strokeStyle = '#c2a76f'; ctx.lineWidth = wdt + 4; ctx.stroke(path);                // sand edge
+  ctx.strokeStyle = '#6a8f3f'; ctx.lineWidth = wdt + Math.max(4, tw * .14); ctx.stroke(path);              // grassy bank (scaled with the zoom so it never eats the bridge-end cells)
+  ctx.strokeStyle = '#c2a76f'; ctx.lineWidth = wdt + Math.max(2, tw * .07); ctx.stroke(path);              // sand edge
   ctx.strokeStyle = '#5db4d4'; ctx.lineWidth = wdt; ctx.stroke(path);
   ctx.strokeStyle = '#8fd6ea'; ctx.lineWidth = wdt * .6; ctx.stroke(path);
   ctx.strokeStyle = 'rgba(255,255,255,.8)'; ctx.lineWidth = Math.max(1.5, wdt * .07);
@@ -463,28 +499,28 @@ function drawWater(P) {
   ctx.beginPath(); ctx.ellipse(p0[0] + cw * .02, p0[1], cw * (.3 + pulse * .05), cw * .09, 0, 0, 6.2832); ctx.fill();
   circle(ctx, p0[0] - cw * .1, p0[1] - cw * .08 - pulse * 4, cw * .1, 'rgba(255,255,255,.35)');
   circle(ctx, p0[0] + cw * .18, p0[1] - cw * .1 - pulse * 6, cw * .13, 'rgba(255,255,255,.3)');
-  // reeds + stones along the bank
+  // reeds + stones along the bank (atlas sprites; the river is sampled every ~0.15-0.3 tile, so decorate every 5th sample)
   const rr = rng(5);
-  for (let i = 0; i < streamPts.length; i += 3) {
+  for (let i = 0; i < streamPts.length; i += FAST ? 7 : 5) {
     const p = streamPts[i];
-    if (rr() < .6) drawRock(ctx, p[0] + wdt * .7 * (rr() < .5 ? -1 : 1), p[1] + 3, tw * .18);
-    else drawFlowerPatch(ctx, p[0] - wdt * .8, p[1] + 2, tw * .35, i);
+    if (rr() < .6) drawSprite(ctx, 'rock', 0, 0, p[0] + wdt * .7 * (rr() < .5 ? -1 : 1), p[1] + 3, tw * .18);
+    else drawSprite(ctx, 'flower', 0, i, p[0] - wdt * .8, p[1] + 2, tw * .35);
   }
   // lily pads, cattails and twinkling highlights on the water
   streamPts.forEach((p, i) => {
-    if (i % 5 === 2) {
+    if (i % 12 === 2) {
       const lx = p[0] + wdt * .12, ly = p[1] + wdt * .05, lr = wdt * .2;
       ctx.fillStyle = '#4f9d49'; ctx.beginPath(); ctx.ellipse(lx, ly, lr, lr * .5, 0, .25, 6.0); ctx.lineTo(lx, ly); ctx.fill();
       ctx.fillStyle = '#74c35e'; ctx.beginPath(); ctx.ellipse(lx - lr * .15, ly - lr * .08, lr * .6, lr * .28, 0, 0, 6.2832); ctx.fill();
-      if (i % 10 === 2) circle(ctx, lx + lr * .2, ly - lr * .3, lr * .22, '#ffc2d4');
+      if (i % 24 === 2) circle(ctx, lx + lr * .2, ly - lr * .3, lr * .22, '#ffc2d4');
     }
-    if (i % 7 === 3) {
+    if (i % 11 === 3) {
       const bx = p[0] + wdt * .62, by = p[1] + 2;
       ctx.strokeStyle = '#4f8a3a'; ctx.lineWidth = Math.max(1, tw * .014);
       ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(bx - 2, by - tw * .3); ctx.moveTo(bx + 4, by); ctx.lineTo(bx + 7, by - tw * .24); ctx.stroke();
       ctx.fillStyle = '#7a4e2a'; ctx.beginPath(); ctx.ellipse(bx - 2, by - tw * .3, tw * .012, tw * .04, 0, 0, 6.2832); ctx.fill();
     }
-    const tws = Math.sin(T * 3 + i * 1.9);
+    const tws = i % 3 ? 0 : Math.sin(T * 3 + i * 1.9);
     if (tws > .35) { ctx.fillStyle = `rgba(255,255,255,${(tws - .35) * 1.2})`; star(ctx, p[0] + Math.sin(i * 7) * wdt * .25, p[1] + Math.cos(i * 5) * wdt * .1, 2 + tws * 2.5); }
   });
   // faint rainbow in the mist
@@ -493,7 +529,43 @@ function drawWater(P) {
 }
 function nearStream(x, y, d) {
   for (let i = 0; i < streamPts.length; i++) { const p = streamPts[i], dx = p[0] - x, dy = (p[1] - y) * 1.3; if (dx * dx + dy * dy < d * d) return true; }
+  for (let i = 0; i < bridgePts.length; i++) { const p = bridgePts[i], dx = p[0] - x, dy = (p[1] - y) * 1.3; if (dx * dx + dy * dy < d * d) return true; }
   return false;
+}
+
+/* Footbridge over the river: stone abutments, a plank deck one cell wide, posts and two-rail handrails, lanterns at the
+ * ends and a soft shadow on the water. Painted into the cached ground layer, after the water and before buildings. */
+function drawBridge(P) {
+  bridgePts = [];
+  if (S.n < FAR_FROM) return;
+  const tw = view.tw, uz = tw * .55, {x0, x1, y} = BRIDGE, a = y + .14, b = y + .86, dz = uz * .1, rh = uz * .42;
+  for (let x = x0; x <= x1 + .01; x += .25) bridgePts.push(P(x, y + .5));
+  poly(ctx, [P(x0 + .15, a + .2), P(x1 - .05, a + .2), P(x1 - .05, b + .2), P(x0 + .15, b + .2)], 'rgba(20,60,80,.22)');                     // shadow on the water
+  const rail = yy => {                                                                                                                       // posts + two rails along one edge
+    ctx.lineCap = 'round';
+    for (let x = x0 + .1; x <= x1 - .09; x += .45) {
+      const p0 = P(x, yy, dz), p1 = P(x, yy, dz + rh);
+      ctx.strokeStyle = '#7a4f2b'; ctx.lineWidth = Math.max(2, tw * .045); ctx.beginPath(); ctx.moveTo(p0[0], p0[1]); ctx.lineTo(p1[0], p1[1]); ctx.stroke();
+      circle(ctx, p1[0], p1[1], Math.max(1.6, tw * .03), '#c79a62');
+    }
+    [rh, rh * .5].forEach((h, i) => {
+      const p0 = P(x0 + .1, yy, dz + h), p1 = P(x1 - .1, yy, dz + h);
+      ctx.strokeStyle = i ? '#9a6a3b' : '#b98550'; ctx.lineWidth = Math.max(1.6, tw * (i ? .028 : .04)); ctx.beginPath(); ctx.moveTo(p0[0], p0[1]); ctx.lineTo(p1[0], p1[1]); ctx.stroke();
+    });
+  };
+  rail(a);                                                                                                                                   // back rail first: the deck covers its feet
+  poly(ctx, [P(x0 - .08, b + .04, 0), P(x0 + .12, b + .04, 0), P(x0 + .12, b + .04, dz * 1.6), P(x0 - .08, b + .04, dz * 1.6)], '#a99a80');     // stone abutments
+  poly(ctx, [P(x1 - .12, b + .04, 0), P(x1 + .08, b + .04, 0), P(x1 + .08, b + .04, dz * 1.6), P(x1 - .12, b + .04, dz * 1.6)], '#b3a58b');
+  poly(ctx, [P(x0, b, dz), P(x1, b, dz), P(x1, b, 0), P(x0, b, 0)], '#7a5230');                                                              // deck side
+  poly(ctx, [P(x0, a, dz), P(x1, a, dz), P(x1, b, dz), P(x0, b, dz)], '#d2a468', '#7a5230', 1);                                              // deck top
+  ctx.strokeStyle = 'rgba(95,58,28,.45)'; ctx.lineWidth = 1;
+  for (let x = x0 + .125; x < x1; x += .125) { const p0 = P(x, a, dz), p1 = P(x, b, dz); ctx.beginPath(); ctx.moveTo(p0[0], p0[1]); ctx.lineTo(p1[0], p1[1]); ctx.stroke(); }
+  poly(ctx, [P(x0, a, dz), P(x1, a, dz), P(x1, a + .08, dz), P(x0, a + .08, dz)], 'rgba(255,240,200,.28)');
+  rail(b);
+  [[x0 + .1, '#ffd86a'], [x1 - .1, '#ffd86a']].forEach(([x, col]) => {                                                                       // lanterns on the front posts
+    const p = P(x, b, dz + rh + uz * .12);
+    circle(ctx, p[0], p[1], tw * .05, 'rgba(255,224,130,.35)'); circle(ctx, p[0], p[1], tw * .028, col);
+  });
 }
 
 /* ======================================================================
@@ -538,36 +610,67 @@ function clearWob(a) { return .5 * Math.sin(3 * a + 1.3) + .3 * Math.sin(5 * a +
 function clearRadius(a, nf) { return nf / 2 * 1.1225 + clearPad(nf - N_MIN) * (1 + .45 * clearWob(a)); }
 // signed distance (norm units ~ tiles) of a grid point outside (+) / inside (-) the clearing for land size nf centred on c
 function clearDist(x, y, nf, c) { const dx = x - c, dy = y - c; return clearNorm(dx, dy) - clearRadius(Math.atan2(dy, dx), nf); }
+/* The far bank is a second, smaller clearing: a rounded box around its cells plus a wobbling pad. The meadow is the UNION
+ * of the two, so the grass reads as one continuous opening in the forest with the river running through it. */
+const farPad = n => n >= 8 ? 1.5 : 1.0;
+function farDist(x, y, n) {
+  const f = farBank(n); if (!f) return 1e9;
+  const mx = (f.x0 + f.x1) / 2, my = (f.y0 + f.y1) / 2, ax = Math.abs(x - mx) - (f.x1 - f.x0) / 2, ay = Math.abs(y - my) - (f.y1 - f.y0) / 2;
+  const sd = Math.hypot(Math.max(ax, 0), Math.max(ay, 0)) + Math.min(Math.max(ax, ay), 0);
+  return sd - farPad(n) * (1 + .4 * clearWob(Math.atan2(y - my, x - mx)));
+}
+function landDist(x, y, n) { return Math.min(clearDist(x, y, n, loOf(n) + n / 2), farDist(x, y, n)); }     // < 0 : inside the open meadow
 const CLEAR_N = 96;
-function clearOutline(P, nf, c, off) {
+function clearOutline(P, nf, c, off) {          // points are [sx, sy, gx, gy]
   const pts = [];
   for (let i = 0; i < CLEAR_N; i++) {
     const a = i / CLEAR_N * 6.2832, k = clearNorm(Math.cos(a), Math.sin(a)), r = (clearRadius(a, nf) + (off || 0)) / k;
-    pts.push(P(c + Math.cos(a) * r, c + Math.sin(a) * r));
+    const gx = c + Math.cos(a) * r, gy = c + Math.sin(a) * r, q = P(gx, gy);
+    pts.push([q[0], q[1], gx, gy]);
+  }
+  return pts;
+}
+function farOutline(P, n, off) {
+  const f = farBank(n); if (!f) return null;
+  const mx = (f.x0 + f.x1) / 2, my = (f.y0 + f.y1) / 2, pts = [];
+  for (let i = 0; i < 64; i++) {
+    const a = i / 64 * 6.2832, dx = Math.cos(a), dy = Math.sin(a);
+    let lo = 0, hi = 14;
+    for (let k = 0; k < 14; k++) { const m = (lo + hi) / 2; if (farDist(mx + dx * m, my + dy * m, n) < (off || 0)) lo = m; else hi = m; }
+    const gx = mx + dx * lo, gy = my + dy * lo, q = P(gx, gy);
+    pts.push([q[0], q[1], gx, gy]);
   }
   return pts;
 }
 function tracePts(pts) { ctx.beginPath(); pts.forEach((p, i) => i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])); ctx.closePath(); }
 
 function drawLand(P) {
-  const tw = view.tw, nf = view.hi - view.lo, c = view.c;
-  // soft shade where the canopy overhangs the opening, then feathered grass so the edge melts into the forest floor
-  [[.95, .08], [.6, .09], [.3, .1]].forEach(([off, a]) => { tracePts(clearOutline(P, nf, c, off)); ctx.fillStyle = `rgba(32,82,36,${a})`; ctx.fill(); });
-  [[.34, .2], [.24, .2], [.15, .22], [.07, .25]].forEach(([off, a]) => { tracePts(clearOutline(P, nf, c, off)); ctx.fillStyle = `rgba(150,206,96,${a})`; ctx.fill(); });
-  const ring = clearOutline(P, nf, c, 0);
-  let y0 = 1e9, y1 = -1e9; ring.forEach(p => { if (p[1] < y0) y0 = p[1]; if (p[1] > y1) y1 = p[1]; });
-  const g = ctx.createLinearGradient(0, y0, 0, y1);
-  g.addColorStop(0, '#a6da6a'); g.addColorStop(.5, '#9bd366'); g.addColorStop(1, '#88c65a');
-  tracePts(ring); ctx.fillStyle = g; ctx.fill();
-  ctx.save(); tracePts(ring); ctx.clip();
+  const tw = view.tw, nf = view.hi - view.lo, c = view.c, n = S.n, far = farBank(n);
+  const outline = (i, off) => i ? farOutline(P, n, off) : clearOutline(P, nf, c, off);
+  const rings = far ? [outline(0, 0), outline(1, 0)] : [outline(0, 0)];
+  rings.forEach((ring, i) => {
+    // soft shade where the canopy overhangs the opening, then feathered grass so the edge melts into the forest floor
+    [[.95, .08], [.6, .09], [.3, .1]].forEach(([off, a]) => { tracePts(outline(i, off)); ctx.fillStyle = `rgba(32,82,36,${a})`; ctx.fill(); });
+    [[.34, .2], [.24, .2], [.15, .22], [.07, .25]].forEach(([off, a]) => { tracePts(outline(i, off)); ctx.fillStyle = `rgba(150,206,96,${a})`; ctx.fill(); });
+  });
+  rings.forEach(ring => {              // opaque meadow of every clearing goes on AFTER all the shade / feather rings, so an overlap shows no darker seam
+    let y0 = 1e9, y1 = -1e9; ring.forEach(p => { if (p[1] < y0) y0 = p[1]; if (p[1] > y1) y1 = p[1]; });
+    const g = ctx.createLinearGradient(0, y0, 0, y1);
+    g.addColorStop(0, '#a6da6a'); g.addColorStop(.5, '#9bd366'); g.addColorStop(1, '#88c65a');
+    tracePts(ring); ctx.fillStyle = g; ctx.fill();
+  });
+  ctx.save(); ctx.beginPath();            // clip to the UNION of the clearings: light patches and tufts never spill into the forest
+  rings.forEach(ring => { ring.forEach((p, j) => j ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])); ctx.closePath(); });
+  ctx.clip();
   // warm sunlight pooling in the middle, dappled light and cool soft shade (organic variation, deliberately not a grid)
   const span = nf / 2 + clearPad(nf - N_MIN), mc = P(c, c), rad = tw * span * .75;
   ctx.save(); ctx.translate(mc[0], mc[1]); ctx.scale(1, .5);
   const sg = ctx.createRadialGradient(0, 0, 0, 0, 0, rad); sg.addColorStop(0, 'rgba(246,255,184,.42)'); sg.addColorStop(1, 'rgba(246,255,184,0)');
   ctx.fillStyle = sg; ctx.fillRect(-rad, -rad, rad * 2, rad * 2); ctx.restore();
-  const dr = rng(14);
-  for (let i = 0; i < 16; i++) {
-    const a = dr() * 6.2832, d = Math.sqrt(dr()) * span * .9, p = P(c + Math.cos(a) * d, c + Math.sin(a) * d), r2 = tw * (.7 + dr() * 1.1), warm = i % 3 !== 2;
+  const dr = rng(14), fmx = far ? (far.x0 + far.x1) / 2 : 0, fmy = far ? (far.y0 + far.y1) / 2 : 0;
+  for (let i = 0; i < (FAST ? 10 : 16) + (far ? 4 : 0); i++) {
+    const a = dr() * 6.2832, d = Math.sqrt(dr()) * span * .9, r2 = tw * (.7 + dr() * 1.1), warm = i % 3 !== 2;
+    const p = i >= (FAST ? 10 : 16) ? P(fmx + Math.cos(a) * d * .3, fmy + Math.sin(a) * d * .3) : P(c + Math.cos(a) * d, c + Math.sin(a) * d);     // the last four sit on the far bank
     ctx.save(); ctx.translate(p[0], p[1]); ctx.scale(1, .5);
     const rg = ctx.createRadialGradient(0, 0, 0, 0, 0, r2);
     rg.addColorStop(0, warm ? 'rgba(240,252,170,.26)' : 'rgba(70,140,90,.13)'); rg.addColorStop(1, 'rgba(240,252,170,0)');
@@ -576,8 +679,9 @@ function drawLand(P) {
   // grass tufts and flowers across the whole meadow
   ctx.lineWidth = Math.max(1, tw * .014); ctx.strokeStyle = '#5f9d3d';
   tufts.forEach(t => {
-    if (clearDist(t.x + .5, t.y + .5, nf, c) > -.25) return;
-    t.list.forEach(o => {
+    if (landDist(t.x + .5, t.y + .5, n) > -.25) return;
+    t.list.forEach((o, oi) => {
+      if (FAST && oi > 1) return;                                       // phones: half the tufts
       const p = P(t.x + o.dx, t.y + o.dy), s = tw * .07;
       if (p[0] < -20 || p[0] > W + 20 || p[1] < -20 || p[1] > H + 20) return;
       if (o.f) { circle(ctx, p[0], p[1] - s, s * .55, o.f); circle(ctx, p[0], p[1] - s, s * .2, '#e6a53c'); }
@@ -587,16 +691,18 @@ function drawLand(P) {
   ctx.restore();
   // leafy, scalloped lip along the outline with a few blades and tiny flowers reaching over the forest floor
   const lr = rng(21);
-  ring.forEach((p, i) => {
-    const q = ring[(i + 1) % ring.length], r2 = tw * (.05 + lr() * .035);
-    circle(ctx, p[0], p[1] + tw * .012, r2, lr() < .5 ? '#79b84f' : '#8fcc5e');
+  rings.forEach((ring, ri) => ring.forEach((p, i) => {
+    const q = ring[(i + 1) % ring.length], r2 = tw * (.05 + lr() * .035), cl = lr() < .5;
+    // where one clearing runs into the other the lip would draw a seam across the meadow: skip those points
+    if ((ri === 0 && far ? farDist(p[2], p[3], n) : ri === 1 ? clearDist(p[2], p[3], nf, c) : 1) < -.15) return;
+    circle(ctx, p[0], p[1] + tw * .012, r2, cl ? '#79b84f' : '#8fcc5e');
     if (i % 3 === 0) {
       ctx.strokeStyle = '#68ab43'; ctx.lineWidth = Math.max(1, tw * .016);
       const nx = p[1] - q[1], ny = q[0] - p[0], nl = Math.hypot(nx, ny) || 1, sx = nx / nl * tw * .09, sy = ny / nl * tw * .06;
       ctx.beginPath(); ctx.moveTo(p[0], p[1]); ctx.lineTo(p[0] + sx * .6 - 2, p[1] + sy - tw * .06); ctx.moveTo(p[0], p[1]); ctx.lineTo(p[0] + sx + 2, p[1] + sy - tw * .04); ctx.stroke();
     }
     if (i % 11 === 5) { circle(ctx, p[0], p[1] - tw * .03, tw * .028, ['#fff6b0', '#ffc2d4', '#ffffff'][i % 3]); circle(ctx, p[0], p[1] - tw * .03, tw * .01, '#e6a53c'); }
-  });
+  }));
 }
 function drawStump(c, x, y, s) {
   c.fillStyle = 'rgba(30,70,30,.22)'; c.beginPath(); c.ellipse(x - s * .06, y + s * .02, s * .4, s * .12, 0, 0, 6.2832); c.fill();
@@ -953,7 +1059,7 @@ const wild = [];
  * boundary of the meadow and moves outward with every expansion. Bushes and rocks may hug the edge; flowers live
  * inside the meadow. Trees that the outline has swallowed leave a stump behind. */
 const WILD_EDGE = {tree: .15, bush: .02, rock: .02}, WILD_JIT = {tree: .55, bush: .4, rock: .4};
-function wildDist(o, n) { return clearDist(o.x, o.y, n, loOf(n) + n / 2); }
+function wildDist(o, n) { return landDist(o.x, o.y, n); }
 function wildVisible(o, n) {
   const d = wildDist(o, n);
   return o.type === 'flower' ? d <= -.15 : d >= WILD_EDGE[o.type] + o.jit * WILD_JIT[o.type];
@@ -961,27 +1067,25 @@ function wildVisible(o, n) {
 const isStump = (o, n) => { const d = wildDist(o, n); return o.type === 'tree' && o.jit < .45 && d <= -.3 && d >= -1.7 && wildType(o) === 'tree'; };
 /* Tall trees never stand in front of the plot (they would hide the build area); the front keeps low plants.
  * Decided in world space (against the target view) so objects do not pop while the camera is zooming. */
-function wildType(o) { return o.type === 'tree' && o.x + o.y > 2 * tgt.c + 1.4 ? (o.seed % 2 ? 'bush' : 'flower') : o.type; }
+function wildType(o) { return o.type === 'tree' && o.x + o.y > 2 * (loOf(S.n) + S.n / 2) + 1.4 ? (o.seed % 2 ? 'bush' : 'flower') : o.type; }
 function wildSize(type, o, tw) { return type === 'tree' ? tw * 1.05 * o.size : type === 'bush' ? tw * .7 * o.size : type === 'rock' ? tw * .55 * o.size : type === 'stump' ? tw * .5 * o.size : tw * .8; }
 function wildBox(type, p, s) {
   return type === 'tree' ? rectPts(p[0], p[1], s * .46, s * .98, s * .04) : type === 'bush' ? rectPts(p[0], p[1], s * .5, s * .72, s * .02)
     : type === 'rock' ? rectPts(p[0], p[1], s * .38, s * .4, s * .02) : type === 'stump' ? rectPts(p[0], p[1], s * .32, s * .4, s * .04) : rectPts(p[0], p[1], s * .45, s * .28, s * .05);
 }
 /* Everything that decides whether a scenery object is actually painted for land size n in the given view. */
-function wildInfo(o, P, tw, lp, n) {
+function wildInfo(o, P, tw, lps, n) {
   const stump = !wildVisible(o, n) && isStump(o, n);
   if (!stump && !wildVisible(o, n)) return null;
+  if (FAST && o.type !== 'tree' && !stump && o.jit > .7) return null;           // phones: ~30% fewer low plants (trees keep the forest rich)
   const p = P(o.x, o.y);
   if (p[0] < -tw * 2 || p[0] > W + tw * 2 || p[1] < -tw * 2.5 || p[1] > H + tw * 3) return null;
   if (nearStream(p[0], p[1], tw * .85)) return null;
-  const type = stump ? 'stump' : wildType(o), s = wildSize(type, o, tw);
-  if (polysOverlap(wildBox(type, p, s), lp, 0)) return null;      // its painted box may never touch the plot outline
+  const type = stump ? 'stump' : wildType(o), s = wildSize(type, o, tw), box = wildBox(type, p, s);
+  for (let i = 0; i < lps.length; i++) if (polysOverlap(box, lps[i], 0)) return null;      // its painted box may never touch editable land, the bridge or the river bank cells
   return {type, p, s};
 }
-function drawWildObj(c, type, o, x, y, s, alpha) {
-  if (type === 'tree' || type === 'bush') drawSprite(c, type, o.kind, o.seed, x, y, s, alpha);
-  else { const pa = c.globalAlpha; c.globalAlpha = pa * (alpha == null ? 1 : alpha); if (type === 'rock') drawRock(c, x, y, s); else if (type === 'stump') drawStump(c, x, y, s); else drawFlowerPatch(c, x, y, s, o.seed); c.globalAlpha = pa; }
-}
+function drawWildObj(c, type, o, x, y, s, alpha) { drawSprite(c, type, o.kind, o.seed, x, y, s, alpha); }
 /* Painter's order by footprint rectangles: A is behind B when A lies wholly to the left of B or wholly behind it.
  * A plain "x+y" sort is wrong for big buildings next to small ones; this one is a topological sort with the
  * x+y key only as the tie-break for pairs that have no strict relation. */
@@ -1008,6 +1112,14 @@ function landPoly(P, tw, ex) {
   const A = P(lo - ex, lo - ex), B = P(hi + ex, lo - ex), C = P(hi + ex, hi + ex), D = P(lo - ex, hi + ex);
   return [A, B, [B[0], B[1] + dz], [C[0], C[1] + dz], [D[0], D[1] + dz], D];
 }
+const cellPoly = (P, x0, y0, x1, y1, ex) => [P(x0 - ex, y0 - ex), P(x1 + ex, y0 - ex), P(x1 + ex, y1 + ex), P(x0 - ex, y1 + ex)];
+/* Editable ground = the plot plus (from 49 tiles) the far bank: the polygons scenery must keep clear of. `all` adds the bridge deck. */
+function landPolys(P, tw, ex, all) {
+  const out = [landPoly(P, tw, ex)], f = farBank(S.n);
+  if (f) out.push(cellPoly(P, f.x0, f.y0, f.x1, f.y1, ex));
+  if (all && f) out.push(cellPoly(P, BRIDGE.x0, BRIDGE.y, BRIDGE.x1, BRIDGE.y + 1, ex));
+  return out;
+}
 const rectPts = (x, y, hw, up, down) => [[x - hw, y - up], [x + hw, y - up], [x + hw, y + down], [x - hw, y + down]];
 
 /* ======================================================================
@@ -1024,192 +1136,241 @@ function wake() { lastActive = performance.now(); if (!rafId && !document.hidden
 function markDirty() { dirty = 1; wake(); }
 
 function spawnSparks(x, y, n, cols) {
+  n = Math.min(n, FAST ? 8 : 16, 40 - sparks.length);              // a hard cap: particles must never pile up on a slow phone
   for (let i = 0; i < n; i++) { const a = Math.random() * 6.28, v = 40 + Math.random() * 90; sparks.push({x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 40, life: 1, col: cols[i % cols.length], s: 3 + Math.random() * 4}); }
 }
 
-/* ---- cached static layer ----
- * Ground (meadow, stream, road) and all forest scenery that no building can overlap are painted ONCE into an offscreen
- * canvas and only blitted afterwards. It is rebuilt when the signature below changes: viewport/DPR, camera
- * (zoom/pan), land size, building set/positions, or the expand-preview marking. Animation ticks never touch it.
- * While the camera is still easing (or the expand effect runs) the same code paints live, in the original order. */
-let stat = null, vgGrad = null;
-const perf = {on: /[?&]perf=1(&|$)/.test(location.search), builds: 0, fps: 0, ms: 0, frames: 0, t0: 0, el: null};
+/* ---- v6 render pipeline ----
+ * Per redraw the CPU only does a handful of image blits:
+ *   backdrop (1 image in fast mode) -> GROUND layer (1 image: meadow, river, bridge, road, all scenery that cannot touch a
+ *   building, foreground dressing, vignette) -> a few sprite blits for buildings + the scenery beside them -> overlays.
+ * The GROUND layer is repainted only when the terrain really changes (land size, viewport / DPR). Taps, the build shop,
+ * the study sheet, selecting / moving / building / storing never touch it: buildings are cached sprites (one bitmap per
+ * type) and the painter's order is cached per building set. The camera only moves the finished image around.
+ * Expansion cross-fades two finished scene images (before / after) instead of redrawing a forest every animation frame. */
+let stat = null, statId = 0, tcv = null, trans = null, ordered = [], ordSig = '', LP = null;
+const perf = {on: /[?&]perf=1(&|$)/.test(location.search), builds: 0, orders: 0, buildMs: 0, fps: 0, ms: 0, worst: 0, wmax: 0, frames: 0, t0: 0, el: null};
 const VIEW_KEYS = ['tw', 'cx', 'cy', 'c', 'lo', 'hi'];
 const viewSettled = () => VIEW_KEYS.every(k => view[k] === tgt[k]);
-function staticSig() {
-  return [W, H, dpr, Math.round(area.bottom), S.n, ui.mode === 'expand' && S.n < N_MAX ? 1 : 0, view.tw, view.cx, view.cy, view.c, view.lo, view.hi,
-    S.blds.map(b => b.id + b.type + b.x + ',' + b.y).join(';')].join('|');
+function staticSig() {      // terrain only: nothing about buildings, selection, modes, sheets or the live camera
+  return [W, H, dpr, FAST ? 1 : 0, S.n, bview.tw.toFixed(2), bview.cx.toFixed(1), bview.cy.toFixed(1)].join('|');
 }
 const bboxHit = (a, b) => a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1;
-const bldEnt = (b, P, tw) => { const it = ITEMS[b.type]; return {k: b.x + it.w + b.y + it.h - .01 + b.x * 1e-4, x0: b.x, x1: b.x + it.w, y0: b.y, y1: b.y + it.h,
-  f: () => drawBuilding(ctx, P, tw, b.type, b.x, b.y, ui.mode === 'move' && ui.moveId === b.id ? .5 : 1, T)}; };
+/* Maps what the base camera painted onto the camera `to` (a similarity: ground-plane exact for this projection). */
+function affine(from, to) {
+  const k = to.tw / from.tw;
+  return {k, tx: to.cx - k * from.cx, ty: to.cy - k * from.cy + (from.c - to.c) * to.tw / 2, id: k === 1 && to.cx === from.cx && to.cy === from.cy && to.c === from.c};
+}
 
-/* Splits scenery into `free` (cannot overlap any building: painted first, in simple k order) and `dyn` (touches a
- * building's painted box, or is highlighted for the next expansion: depth-sorted exactly together with the buildings). */
-function collectWild(P, tw, extraGhosts) {
-  const lp = landPoly(P, tw, .25), clearing = ui.mode === 'expand' && S.n < N_MAX, nowMs = performance.now();
-  const boxes = S.blds.map(b => bboxOf(silhouette(b.type, b.x, b.y, P, tw)));
-  boxes.forEach(q => { q.x0 -= 4; q.y0 -= 4; q.x1 += 4; q.y1 += 4; });
-  const free = [], dyn = [];
-  const place = (o, type, p, s, mark, alpha, ghostK) => {
-    const bx = bboxOf(wildBox(type, p, s)), k = o.x + o.y;
-    const ent = {k, x0: o.x, x1: o.x, y0: o.y, y1: o.y, f: () => {
-      if (mark) {
-        const pu = .5 + .5 * Math.sin(T * 4);
-        ctx.fillStyle = `rgba(255,215,90,${.28 + pu * .25})`; ctx.strokeStyle = 'rgba(255,240,170,.9)'; ctx.lineWidth = 1.5;
-        ctx.beginPath(); ctx.ellipse(p[0], p[1], s * .42, s * .13, 0, 0, 6.2832); ctx.fill(); ctx.stroke();
-      }
-      if (ghostK) {
-        const k2 = clamp((performance.now() - ghostK.t0) / (reduced ? 1 : 900), 0, 1);
-        if (k2 >= 1) return;
-        ctx.save(); ctx.translate(p[0], p[1]);
-        if (!reduced) ctx.rotate(Math.sin(k2 * 11 + o.seed) * .14 * (1 - k2));       // sways, then shrinks and dissolves
-        drawWildObj(ctx, type, o, 0, k2 * s * .06, s * (1 - k2 * .55), (1 - k2) * (1 - k2));
-        ctx.restore();
-        circle(ctx, p[0] - s * .2 * k2, p[1] - s * .2 - k2 * s * .3, s * (.14 + k2 * .2), `rgba(255,252,225,${.5 * (1 - k2)})`);
-        circle(ctx, p[0] + s * .22 * k2, p[1] - s * .12 - k2 * s * .2, s * (.1 + k2 * .18), `rgba(235,248,190,${.45 * (1 - k2)})`);
-      } else drawWildObj(ctx, type, o, p[0], p[1], s, alpha);
-    }};
-    (mark || boxes.some(q => boxesTouch(bx, q, 0)) ? dyn : free).push(ent);
-  };
-  for (let i = 0; i < wild.length; i++) {          // `wild` is pre-sorted by k, so `free` needs no further sort
-    const o = wild[i], info = wildInfo(o, P, tw, lp, S.n);
-    if (!info) continue;
-    place(o, info.type, info.p, info.s, clearing && info.type !== 'stump' && !wildVisible(o, S.n + 1), 1, null);
+/* ---- building sprites ----
+ * Every building type is drawn once (full vector detail, at the base zoom) into its own small bitmap and blitted afterwards.
+ * Drawing is translation-invariant on screen, so one bitmap serves every tile. Ambient props that used to animate
+ * (chimney smoke, flags, butterflies, telescope) are frozen in the bitmap on purpose: performance before decoration. */
+function bldSprite(type) {
+  const tw = bview.tw, key = tw.toFixed(2) + '|' + dpr;
+  if (key !== bsKey) { bsprites.clear(); bsKey = key; }
+  let e = bsprites.get(type);
+  if (!e) {
+    const it = ITEMS[type], P0 = makeP(tw, 0, 0, 0), sil = silhouette(type, 0, 0, P0, tw), pad = 6 + tw * .12;
+    const sh = [P0(-1.9, -.15), P0(it.w + .3, -.15), P0(it.w + .3, it.h + .3), P0(-1.9, it.h + .3)];          // ground shadow reaches toward the upper left
+    const bb = bboxOf(sil.concat(sh)), w = Math.ceil(bb.x1 - bb.x0 + pad * 2), h = Math.ceil(bb.y1 - bb.y0 + pad * 2);
+    const ox = pad - bb.x0, oy = pad - bb.y0, cv = document.createElement('canvas');
+    cv.width = Math.ceil(w * dpr); cv.height = Math.ceil(h * dpr);
+    const g = cv.getContext('2d'); g.scale(dpr, dpr);
+    drawBuilding(g, makeP(tw, ox, oy, 0), tw, type, 0, 0, 1, 0);
+    e = {cv, w, h, ox, oy}; bsprites.set(type, e);
   }
-  if (extraGhosts) fxGhosts.forEach(g => {
-    if (nowMs - g.t0 >= (reduced ? 1 : 900)) return;
-    place(g.o, g.type, P(g.o.x, g.o.y), wildSize(g.type, g.o, tw), false, 1, g);
-  });
-  return {free, dyn};
+  return e;
+}
+function drawBldSprite(c, type, bx, by, alpha) {
+  const e = bldSprite(type), a = (LP || curP())(bx, by), k = view.tw / bview.tw;
+  if (alpha < 1) c.globalAlpha = alpha;
+  c.drawImage(e.cv, a[0] - e.ox * k, a[1] - e.oy * k, e.w * k, e.h * k);
+  if (alpha < 1) c.globalAlpha = 1;
+}
+const bldEnt = b => { const it = ITEMS[b.type]; return {k: b.x + it.w + b.y + it.h - .01 + b.x * 1e-4, x0: b.x, x1: b.x + it.w, y0: b.y, y1: b.y + it.h,
+  f: () => drawBldSprite(ctx, b.type, b.x, b.y, ui.mode === 'move' && ui.moveId === b.id ? .5 : 1)}; };
+
+/* Paints the scenery that no building can ever overlap straight into the ground layer (in simple k order) and returns `dyn`:
+ * the few objects inside a building's possible painted reach, which stay live sprites depth-sorted with the buildings.
+ * `marks` lists what the NEXT expansion will clear (drawn as gold rings in expand mode, from this cached list). */
+function collectWild(P, tw) {
+  const lps = landPolys(P, tw, .25, true), edit = landPolys(P, tw, .25, false), n = S.n;
+  // zones where a building's painted shape (roof, chimney, flag...) can reach: scenery in them is depth-sorted with the buildings
+  const up = tw * 2.3, side = tw * .35, zones = edit.map(pg => { const q = bboxOf(pg); return {x0: q.x0 - side, x1: q.x1 + side, y0: q.y0 - up, y1: q.y1 + tw * .2}; });
+  const dyn = [], marks = [];
+  for (let i = 0; i < wild.length; i++) {          // `wild` is pre-sorted by k, so the ground layer needs no further sort
+    const o = wild[i], info = wildInfo(o, P, tw, lps, n);
+    if (!info) continue;
+    const {type, p, s} = info;
+    if (type !== 'stump' && n < N_MAX && !wildVisible(o, n + 1)) marks.push({o, type});         // trees that the next expansion clears
+    const bx = bboxOf(wildBox(type, p, s));
+    if (zones.some(z => bboxHit(bx, z))) dyn.push({k: o.x + o.y, x0: o.x, x1: o.x, y0: o.y, y1: o.y, f: () => { const q = LP(o.x, o.y); drawWildObj(ctx, type, o, q[0], q[1], wildSize(type, o, view.tw)); }});
+    else drawWildObj(ctx, type, o, p[0], p[1], s);   // everything else is painted straight into the ground layer
+  }
+  return {dyn, marks};
 }
 function renderGround(P) {
   drawLand(P);                         // the meadow first, so the stream and road cross it instead of being painted over
   drawWater(P);
+  drawBridge(P);
   drawPath(P);
 }
-function buildStatic(sig, P, tw) {
+/* Repaints the ground layer for the BASE camera (the live camera is swapped out for the duration). */
+function buildStatic(sig) {
+  const t0 = performance.now();
   perf.builds++;
-  if (!stat) { const c = document.createElement('canvas'); c.width = canvas.width; c.height = canvas.height; stat = {cv: c, g: c.getContext('2d')}; }
-  const keepT = T; T = 0;                                  // the cached picture is the calm, frozen water state
+  if (!stat || stat.cv.width !== canvas.width || stat.cv.height !== canvas.height) stat = Object.assign(makeLayer(), {sig: '', id: 0, dyn: [], marks: []});
+  if (spriteBytes > 28e6) { sprites.clear(); spriteBytes = 0; }          // memory guard: the atlas is rebuilt lazily, never mid-build
+  const keepView = Object.assign({}, view), keepT = T; Object.assign(view, bview); T = 0;     // calm, frozen water state
   ctx = stat.g; ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H);
-  renderGround(P);
-  const {free, dyn} = collectWild(P, tw, false);
-  free.forEach(e => e.f());
-  ctx = mainCtx; T = keepT;
-  stat.sig = sig;
-  stat.sorted = depthSort(dyn.concat(S.blds.map(b => bldEnt(b, P, tw))));
-  stat.fg = foregroundList(P);
+  try {
+    const P = curP(), tw = view.tw;
+    renderGround(P);
+    const {dyn, marks} = collectWild(P, tw);
+    drawForegroundList(foregroundList(P));
+    ctx.fillStyle = vignetteGradient(ctx); ctx.fillRect(0, 0, W, H);
+    stat.dyn = dyn; stat.marks = marks;
+  } finally { ctx = mainCtx; Object.assign(view, keepView); T = keepT; }
+  stat.sig = sig; stat.id = ++statId; ordSig = '';
+  perf.buildMs = performance.now() - t0;
+}
+function vignetteGradient(c) {
+  const g = c.createRadialGradient(W / 2, H * .5, Math.min(W, H) * .35, W / 2, H * .5, Math.max(W, H) * .75);
+  g.addColorStop(0, 'rgba(50,70,20,0)'); g.addColorStop(1, 'rgba(50,60,20,.28)');
+  return g;
+}
+function ensureStatic() { const sig = staticSig(); if (!stat || stat.sig !== sig) buildStatic(sig); }
+/* Painter's order of buildings + the scenery that can touch them. Computed once per terrain / building set (never per
+ * frame, and never because of camera or selection changes), so the quadratic depthSort runs on a few dozen entities. */
+function ensureOrder() {
+  const sig = stat.id + '|' + S.blds.map(b => b.id + b.type + b.x + ',' + b.y).join(';');
+  if (sig === ordSig) return;
+  ordSig = sig; perf.orders++;
+  ordered = depthSort(stat.dyn.concat(S.blds.map(bldEnt)));
+}
+/* Draws the cached ground layer for the live camera (a plain blit; scaled only while a sheet changes the live zoom). */
+function drawGround(c) {
+  const A = affine(bview, view);
+  if (A.id) { c.drawImage(stat.cv, 0, 0, W, H); return; }
+  c.save(); c.transform(A.k, 0, 0, A.k, A.tx, A.ty); c.drawImage(stat.cv, 0, 0, W, H); c.restore();
+}
+/* One finished scene (ground + buildings + beside-scenery) in live-camera coordinates, no overlays: used by the expand transition. */
+function composeInto(layer) {
+  const keep = ctx; ctx = layer.g; LP = curP();
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H);
+  drawGround(ctx); ordered.forEach(e => e.f());
+  ctx = keep;
+}
+
+function drawBackdrop() {
+  const cloudsOn = !FAST && !reduced;
+  if (bgPrev && bgFade > 0) {          // forest withdrawing: cross-fade from the previous stage's painted forest
+    ctx.drawImage(bgPrev.sky, 0, 0, W, H);
+    if (bgPrev.far) ctx.drawImage(bgPrev.far, 0, 0, W, H);
+    ctx.globalAlpha = 1 - bgFade; ctx.drawImage(bg.sky, 0, 0, W, H); if (bg.far) ctx.drawImage(bg.far, 0, 0, W, H); ctx.globalAlpha = 1;
+    return;
+  }
+  ctx.drawImage(bg.sky, 0, 0, W, H);
+  if (cloudsOn) clouds.forEach(cl => { const x = ((cl.x * W + T * cl.v) % (W + cl.s * 3)) - cl.s * 1.5; drawCloud(ctx, x, cl.y * H, cl.s * (W < 500 ? .7 : 1)); });
+  if (bg.far) ctx.drawImage(bg.far, 0, 0, W, H);
+}
+const smooth = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+let bloomSprite = null;
+/* Expand transition: two finished images (before / after) are placed on an interpolated camera and cross-faded. That is
+ * two image draws + one light bloom per frame, however big the forest is; no tree is painted during the animation. */
+function drawTransition(now) {
+  if (trans.phase < 2) {                 // phase 0: show the old picture for one frame; phase 1 (next frame) does the one-off build
+    ctx.drawImage(trans.before.cv, 0, 0, W, H);
+    trans.phase = 1; dirty = 1;
+    return;
+  }
+  const t = clamp((now - trans.t0) / trans.dur, 0, 1), e = smooth(0, 1, t);
+  const vs = {c: lerp(trans.a.c, trans.b.c, e)};
+  vs.tw = lerp(trans.a.tw, trans.b.tw, e); vs.cx = lerp(trans.a.cx, trans.b.cx, e); vs.cy = lerp(trans.a.cy, trans.b.cy, e);
+  [[trans.before, trans.a, 1 - smooth(.45, 1, t)], [trans.after, trans.b, smooth(0, .7, t)]].forEach(([layer, from, alpha]) => {
+    const A = affine(from, vs);
+    ctx.save(); ctx.globalAlpha = alpha; ctx.transform(A.k, 0, 0, A.k, A.tx, A.ty); ctx.drawImage(layer.cv, 0, 0, W, H); ctx.restore();
+  });
+  if (!bloomSprite) {
+    bloomSprite = document.createElement('canvas'); bloomSprite.width = bloomSprite.height = 64;
+    const g = bloomSprite.getContext('2d'), rg = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+    rg.addColorStop(0, 'rgba(255,250,200,.5)'); rg.addColorStop(1, 'rgba(255,250,200,0)'); g.fillStyle = rg; g.fillRect(0, 0, 64, 64);
+  }
+  const a = Math.sin(t * Math.PI), m = curP()(view.c, view.c), R = view.tw * view.hi * (.6 + .9 * e);
+  ctx.globalAlpha = a * .8; ctx.drawImage(bloomSprite, m[0] - R, m[1] - R * .6, R * 2, R * 1.2); ctx.globalAlpha = 1;
+  bgFade = 1 - e;
+  if (t >= 1) { trans = null; bgPrev = null; bgFade = 0; dirty = 1; }      // one more frame follows with the overlays (expand preview, grid)
 }
 
 function draw() {
-  const t0 = perf.on ? performance.now() : 0;
+  const t0 = performance.now(), now = t0;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, W, H);
-  ctx.drawImage(bg.sky, 0, 0, W, H);
-  clouds.forEach(cl => { const x = ((cl.x * W + T * cl.v) % (W + cl.s * 3)) - cl.s * 1.5; drawCloud(ctx, x, cl.y * H, cl.s * (W < 500 ? .7 : 1)); });
-  if (bgPrev && bgFade > 0) {          // forest withdrawing: cross-fade from the previous stage's painted forest
-    ctx.drawImage(bgPrev.far, 0, 0, W, H);
-    ctx.globalAlpha = 1 - bgFade; ctx.drawImage(bg.far, 0, 0, W, H); ctx.globalAlpha = 1;
-  } else ctx.drawImage(bg.far, 0, 0, W, H);
-  const P = curP(), tw = view.tw, uz = tw * .55;
-
-  const live = !viewSettled() || fx || fxGhosts.length > 0;
-  let fgList;
-  if (!live) {
-    const sig = staticSig();
-    if (!stat || stat.sig !== sig) buildStatic(sig, P, tw);
-    ctx.drawImage(stat.cv, 0, 0, W, H);
-    drawOverlays(P);
-    stat.sorted.forEach(e => e.f());
-    fgList = stat.fg;
-  } else {                              // camera easing / expand effect: paint live, original layer order
-    renderGround(P);
-    drawExpandGlow(P);
-    drawOverlays(P);
-    const {free, dyn} = collectWild(P, tw, true);
-    free.sort((a, b) => a.k - b.k).forEach(e => e.f());
-    depthSort(dyn.concat(S.blds.map(b => bldEnt(b, P, tw)))).forEach(e => e.f());
-    fgList = foregroundList(P);
+  LP = curP();
+  if (trans && trans.phase === 1) {      // the heavy one-off work happens here, one frame after the tap was acknowledged on screen
+    const keepView = Object.assign({}, view);
+    Object.assign(view, trans.b);
+    ensureStatic(); ensureOrder(); composeInto(trans.after);
+    Object.assign(view, keepView);
+    trans.phase = 2; trans.t0 = performance.now();
+    if (reduced) { trans = null; bgPrev = null; bgFade = 0; }
   }
-
-  drawGhostAndSelection(P, uz);
-  drawForegroundList(fgList);
-
-  // sparkles
+  drawBackdrop();
+  if (trans) drawTransition(now);
+  else {
+    ensureStatic(); ensureOrder();
+    drawGround(ctx);
+    drawOverlays(LP);
+    ordered.forEach(e => e.f());
+    drawGhostAndSelection(LP, view.tw * .55);
+  }
+  // sparkles (hard-capped count, one path each)
   for (let i = sparks.length - 1; i >= 0; i--) {
     const s = sparks[i]; s.life -= .02; s.x += s.vx * .016; s.y += s.vy * .016; s.vy += 2;
     if (s.life <= 0) { sparks.splice(i, 1); continue; }
     ctx.globalAlpha = s.life; ctx.fillStyle = s.col; star(ctx, s.x, s.y, s.s * (.6 + s.life)); ctx.globalAlpha = 1;
   }
-  // drifting leaves
-  if (!reduced) leaves.forEach(l => {
+  // drifting leaves: rich mode only, a handful of ellipses
+  if (!reduced && !FAST) leaves.forEach(l => {
     const x = ((l.x * W + Math.sin(T * .8 + l.ph) * 30 + T * 6) % (W + 20)), y = (l.y * H + T * l.v) % (H + 20) - 10;
     ctx.save(); ctx.translate(x, y); ctx.rotate(T * .9 + l.ph); ctx.fillStyle = l.ph > 5 ? 'rgba(236,150,60,.8)' : 'rgba(150,205,80,.8)';
     ctx.beginPath(); ctx.ellipse(0, 0, l.s, l.s * .5, 0, 0, 6.2832); ctx.fill(); ctx.restore();
   });
-  // vignette
-  if (!vgGrad) {
-    vgGrad = ctx.createRadialGradient(W / 2, H * .5, Math.min(W, H) * .35, W / 2, H * .5, Math.max(W, H) * .75);
-    vgGrad.addColorStop(0, 'rgba(50,70,20,0)'); vgGrad.addColorStop(1, 'rgba(50,60,20,.28)');
-  }
-  ctx.fillStyle = vgGrad; ctx.fillRect(0, 0, W, H);
-  if (perf.on) perf.ms += (performance.now() - t0 - perf.ms) * .1;
+  if (perf.on) { const d = performance.now() - t0; perf.ms += (d - perf.ms) * .15; perf.wmax = Math.max(perf.wmax, d); }
 }
 
-/* "It opened up!": freshly cleared tiles flash warm and fade outward from the village centre, with twinkles
- * and a soft light bloom. Short, cheap, and shortened to a quick fade under prefers-reduced-motion. */
-let fx = null;
-const fxGhosts = [];
-function drawExpandGlow(P) {
-  if (!fx) return;
-  const el = (performance.now() - fx.t0) / 1000, dur = reduced ? .6 : 1.2;
-  if (el > fx.span + dur) { fx = null; return; }
-  {   // a soft wave of light runs outward through the new meadow (no tile squares are flashed)
-    const k = clamp(el / (dur + fx.span), 0, 1), a = 1 - k, nf = view.hi - view.lo, c = view.c;
-    const r0 = fx.r0 * view.tw, r1 = Math.max(r0 + 1, (nf / 2 + clearPad(nf - N_MIN)) * view.tw), R = lerp(r0, r1, 1 - (1 - k) * (1 - k)), mc = P(c, c);
-    if (a > 0) {
-      ctx.save(); tracePts(clearOutline(P, nf, c, 0)); ctx.clip();
-      ctx.translate(mc[0], mc[1]); ctx.scale(1, .5);
-      const rr = R * .75, wg = ctx.createRadialGradient(0, 0, Math.max(0, rr - view.tw * 2.2), 0, 0, rr + view.tw * .6);
-      wg.addColorStop(0, 'rgba(255,250,190,0)'); wg.addColorStop(.7, `rgba(255,250,190,${.5 * a})`); wg.addColorStop(1, 'rgba(255,250,190,0)');
-      ctx.fillStyle = wg; ctx.fillRect(-rr * 2, -rr * 2, rr * 4, rr * 4); ctx.restore();
-    }
-  }
-  fx.tiles.forEach(t => {
-    const k = clamp((el - (reduced ? 0 : t.delay)) / dur, 0, 1), a = 1 - k;
-    if (a <= 0) return;
-    if (!reduced && k > 0 && k < .95) {
-      const c = P(t.x + t.sx, t.y + t.sy), r = view.tw * (.05 + .06 * Math.sin(k * 3.1416));
-      ctx.fillStyle = `rgba(255,255,235,${.9 * a})`; star(ctx, c[0], c[1] - view.tw * .05, r * 1.6);
-    }
-  });
-  const bl = Math.max(0, 1 - el / (dur + .6));
-  if (bl > 0) {
-    const c = P(view.c, view.c), g = ctx.createRadialGradient(c[0], c[1], 0, c[0], c[1], view.tw * view.hi * .9);
-    g.addColorStop(0, `rgba(255,250,200,${.28 * bl})`); g.addColorStop(1, 'rgba(255,250,200,0)');
-    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
-  }
+/* Visits every editable cell: the plot and (from 49 tiles) the far bank. Water and bridge cells are never visited. */
+function forEachCell(n, fn) {
+  const lo = loOf(n), f = farBank(n);
+  for (let x = lo; x < lo + n; x++) for (let y = lo; y < lo + n; y++) fn(x, y);
+  if (f) for (let x = f.x0; x < f.x1; x++) for (let y = f.y0; y < f.y1; y++) fn(x, y);
 }
-
 function drawOverlays(P) {
   const showGrid = gridA > .02;
-  const lo = view.lo, hi = view.hi, tw = view.tw;
   if (showGrid) {
     const occ = occupiedMap(ui.mode === 'move' ? ui.moveId : null);
     ctx.globalAlpha = gridA;
-    for (let x = Math.ceil(lo - .01); x < hi - .01; x++) for (let y = Math.ceil(lo - .01); y < hi - .01; y++) {
+    forEachCell(S.n, (x, y) => {
       const taken = occ[x + ',' + y];
       poly(ctx, [P(x, y), P(x + 1, y), P(x + 1, y + 1), P(x, y + 1)], taken ? 'rgba(255,150,70,.34)' : 'rgba(255,255,255,.2)', 'rgba(255,255,255,.7)', 1.2);
-    }
+    });
     ctx.globalAlpha = 1;
   }
-  if (ui.mode === 'expand' && S.n < N_MAX) {      // preview of the ring that will be added
-    const n2 = S.n + 1, lo2 = loOf(n2), hi2 = lo2 + n2, pulse = .5 + .5 * Math.sin(T * 4);
-    for (let x = lo2; x < hi2; x++) for (let y = lo2; y < hi2; y++) {
-      if (inLand(x, y)) continue;
+  if (ui.mode === 'expand' && S.n < N_MAX) {      // preview of the ring (and, at 49 tiles, the far bank) that will be added
+    const n2 = S.n + 1, pulse = .5 + .5 * Math.sin(T * 4), tw = view.tw;
+    forEachCell(n2, (x, y) => {
+      if (inLand(x, y)) return;
       poly(ctx, [P(x, y), P(x + 1, y), P(x + 1, y + 1), P(x, y + 1)], `rgba(255,215,90,${.3 + pulse * .25})`, 'rgba(255,240,170,.9)', 1.5);
+    });
+    if (n2 === FAR_FROM) {                         // the bridge deck that will open
+      poly(ctx, [P(BRIDGE.x0, BRIDGE.y), P(BRIDGE.x1, BRIDGE.y), P(BRIDGE.x1, BRIDGE.y + 1), P(BRIDGE.x0, BRIDGE.y + 1)], `rgba(255,200,120,${.2 + pulse * .2})`, 'rgba(255,230,160,.9)', 1.5);
+      const m = P(-1, BRIDGE.y + .5); label('🌉 橋', m[0], m[1] - tw * .3);
     }
+    if (stat && stat.marks) stat.marks.forEach(({o, type}) => {     // trees / bushes the next step clears glow gold (cached list, no scan)
+      const p = P(o.x, o.y), s = wildSize(type, o, tw);
+      ctx.fillStyle = `rgba(255,215,90,${.28 + pulse * .25})`; ctx.strokeStyle = 'rgba(255,240,170,.9)'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.ellipse(p[0], p[1], s * .42, s * .13, 0, 0, 6.2832); ctx.fill(); ctx.stroke();
+    });
   }
 }
 function drawGhostAndSelection(P, uz) {
@@ -1253,7 +1414,7 @@ function drawGhostAndSelection(P, uz) {
       if (!g.ok && g.with) { const ob = S.blds.find(q => q.id === g.with); if (ob) poly(ctx, silhouette(ob.type, ob.x, ob.y, P, tw), `rgba(240,60,40,${.2 + pulse * .15})`, '#ff5a46', 2.5); }
       ctx.save(); ctx.translate(shake, 0);
       fp(g.x, g.y, it.w, it.h, g.ok ? `rgba(120,225,90,${.4 + pulse * .15})` : `rgba(240,80,60,${.5 + pulse * .15})`, g.ok ? '#d7ffb0' : '#ffd0c8', 2.5);
-      drawBuilding(ctx, P, tw, type, g.x, g.y, g.ok ? .82 : .4, T);
+      drawBldSprite(ctx, type, g.x, g.y, g.ok ? .82 : .4);                    // cached bitmap: a hover preview costs one blit
       ctx.setLineDash(g.ok ? [] : [7, 4]);
       poly(ctx, silhouette(type, g.x, g.y, P, tw), g.ok ? null : `rgba(240,60,40,${.16 + pulse * .1})`, g.ok ? 'rgba(215,255,176,.9)' : '#ff4a3a', 2.5);
       ctx.setLineDash([]); ctx.restore();
@@ -1274,11 +1435,11 @@ const fg = (() => { const r = rng(2024), a = []; for (let i = 0; i < 14; i++) a.
  * up. The whole centre (the interaction zone) and everything inside the plot outline stay free, and nothing here is
  * tall enough to read as a wall of trees. */
 function foregroundList(P) {
-  const out = [], tw = view.tw, grow = clamp(view.hi - view.lo - N_MIN, 0, 4), lp = landPoly(P, tw, .5);
+  const out = [], tw = view.tw, grow = clamp(view.hi - view.lo - N_MIN, 0, 4), lps = landPolys(P, tw, .5, true);
   const top = view.cy + tw * .6, span = area.bottom - 12 - top;
   if (span < 10) return out;
   const strip = .15 - grow * .025;               // 15% of each side at 16 tiles, 5% at 64
-  const keep = Math.round(12 - grow * 2.5);      // fewer foreground plants as the land opens up
+  const keep = Math.round((FAST ? 8 : 12) - grow * 2.5);      // fewer foreground plants on phones and as the land opens up
   fg.forEach((f, i) => {
     if (i >= keep) return;
     const left = f.fx < .5, u = (left ? f.fx : f.fx - .5) * 2;
@@ -1286,17 +1447,20 @@ function foregroundList(P) {
     const s = f.t === 'bush' ? Math.min(tw * .5, 34) : Math.min(tw * .7, 44);
     // the centre interaction zone (everything between the two side strips) and the plot outline stay free
     if (x > W * strip && x < W * (1 - strip)) return;
-    if (nearStream(x, y, tw * .8) || polysOverlap(rectPts(x, y, s * .9, s * .8, s * .05), lp, 0)) return;
+    const box = rectPts(x, y, s * .9, s * .8, s * .05);
+    if (nearStream(x, y, tw * .8) || lps.some(lp => polysOverlap(box, lp, 0))) return;
     out.push({f, x, y, s});
   });
   return out;
 }
 function drawForegroundList(list) {
-  list.forEach(({f, x, y, s}) => { if (f.t === 'bush') drawSprite(ctx, 'bush', f.k, f.seed, x, y, s, .92); else drawFlowerPatch(ctx, x, y, s, f.seed); });
+  list.forEach(({f, x, y, s}) => drawSprite(ctx, f.t, f.k, f.seed, x, y, s, .92));        // baked into the ground layer once
 }
 
-/* full-rate animation (camera, grid fade, effects, long-press ring) vs. gentle pulsing highlights (~30 fps) */
-const isBusy = want => !viewSettled() || gridA !== want || bgFade > 0 || sparks.length > 0 || ui.hold || fx || fxGhosts.length > 0;
+/* Full-rate frames only while something really moves (live camera easing under a sheet, grid fade, the expand transition,
+ * sparks, the long-press ring). Highlight pulses run at ~20 fps. Ambient clouds / leaves exist only in rich mode and stop
+ * 8 s after the last touch. In fast mode an idle page requests NO animation frames at all. */
+const isBusy = want => !viewSettled() || gridA !== want || trans || sparks.length > 0 || ui.hold;
 const isPulsing = () => !reduced && (ui.mode === 'expand' || ui.mode === 'store' || ui.ghost || ui.sel || ui.lifted);
 function frame(ts) {
   rafId = 0;
@@ -1304,30 +1468,30 @@ function frame(ts) {
   const now = performance.now();
   const dt = Math.min(.05, (ts - last) / 1000 || .016);
   const want = (ui.mode === 'build' || ui.mode === 'move') ? 1 : 0;
-  // pure ambient motion is throttled; interaction/animation frames run at full rate
-  if (!dirty && !isBusy(want) && now - lastDrawAt < (isPulsing() ? 33 : AMBIENT_STEP_MS)) { rafId = requestAnimationFrame(frame); return; }
+  if (!dirty && !isBusy(want) && now - lastDrawAt < (isPulsing() ? 50 : AMBIENT_STEP_MS)) { rafId = requestAnimationFrame(frame); return; }
   last = ts;
   if (!reduced) T += dt;
-  const k = reduced ? 1 : 1 - Math.exp(-dt * 6);
+  const k = reduced ? 1 : 1 - Math.exp(-dt * 8);
   VIEW_KEYS.forEach(key => { view[key] += (tgt[key] - view[key]) * k; if (Math.abs(tgt[key] - view[key]) < .001) view[key] = tgt[key]; });
   gridA += (want - gridA) * (reduced ? 1 : 1 - Math.exp(-dt * 10));
   if (Math.abs(want - gridA) < .01) gridA = want;
-  if (bgFade > 0) { bgFade = reduced ? 0 : Math.max(0, bgFade - dt / 1.4); if (bgFade === 0) bgPrev = null; }
-  for (let i = fxGhosts.length - 1; i >= 0; i--) if (now - fxGhosts[i].t0 > (reduced ? 1 : 900)) fxGhosts.splice(i, 1);
   dirty = 0; draw(); lastDrawAt = now;
   updateChips();
-  if (perf.on) updatePerf(now);
-  // keep going only while something moves or ambient motion is still allowed; otherwise sleep until wake()
-  const ambient = !reduced && now - lastActive < AMBIENT_IDLE_MS;
+  if (perf.on) updatePerf(now, performance.now() - now);
+  const ambient = !reduced && !FAST && now - lastActive < AMBIENT_IDLE_MS;
   if (dirty || isBusy(want) || isPulsing() || ambient) rafId = requestAnimationFrame(frame);
 }
-function updatePerf(now) {
-  perf.frames++;
+/* ?perf=1 overlay: real measured numbers only. "frame" is the CPU time of the whole frame callback (draw + chips), "worst" the
+ * slowest frame of the last second. fps counts frames actually rendered, so it is low or 0 when the page is idle. */
+function updatePerf(now, ms) {
+  perf.frames++; perf.worst = Math.max(perf.worst, ms);
   if (!perf.t0) perf.t0 = now;
   if (now - perf.t0 >= 500) {
     perf.fps = perf.frames * 1000 / (now - perf.t0); perf.frames = 0; perf.t0 = now;
     if (!perf.el) { perf.el = document.createElement('div'); perf.el.className = 'perf'; perf.el.setAttribute('aria-hidden', 'true'); $('app').appendChild(perf.el); }
-    perf.el.textContent = `fps ${perf.fps.toFixed(0)} | draw ${perf.ms.toFixed(1)}ms | canvas ${canvas.width}x${canvas.height} @${dpr.toFixed(2)} | cache x${perf.builds}`;
+    perf.el.textContent = `${FAST ? 'fast' : 'rich'} fps ${perf.fps.toFixed(0)} | frame ${ms.toFixed(1)}ms avg ${perf.ms.toFixed(1)} worst ${perf.worst.toFixed(1)} | ground rebuilds ${perf.builds} (${perf.buildMs.toFixed(0)}ms) order ${perf.orders} | ` +
+      `canvas ${canvas.width}x${canvas.height} @${dpr.toFixed(2)} | sprites ${sprites.size}+${bsprites.size} ${((spriteBytes + 4 * W * H * dpr * dpr * (2 + (tcv ? 2 : 0))) / 1048576).toFixed(1)}MB`;
+    perf.worst = 0;
   }
 }
 
@@ -1376,7 +1540,8 @@ function toast(msg, undo) {
 $('toastUndo').addEventListener('click', () => { if (undoFn) { const f = undoFn; undoFn = null; $('toast').hidden = true; f(); } });
 
 function updateHUD() {
-  $('hudLand').textContent = `土地${S.n * S.n}マス`;
+  const fb = farBank(S.n);
+  $('hudLand').textContent = `土地${S.n * S.n}マス` + (fb ? `＋対岸${(fb.x1 - fb.x0) * (fb.y1 - fb.y0)}` : '');
   $('hudPoints').textContent = `開拓点${S.points}`;
   $('hudWood').textContent = S.wood; $('hudBooks').textContent = S.books; $('hudGlobe').textContent = S.globe;
 }
@@ -1398,7 +1563,7 @@ function showAction(text, okLabel, okEnabled) {
   $('toast').hidden = true;                          // the placement bar (valid or invalid explanation) is the one active message
   actionbar.hidden = false; $('actionText').textContent = text; $('actionOk').textContent = okLabel; $('actionOk').disabled = !okEnabled; layout();
 }
-function hideAction() { actionbar.hidden = true; actionbar.classList.remove('lifted'); layout(); }
+function hideAction() { actionbar.hidden = true; actionbar.classList.remove('lifted'); hoverKey = ''; layout(); }
 
 function enterMode(mode) {
   if (ui.mode === mode && mode !== 'explore') mode = 'explore';
@@ -1449,17 +1614,35 @@ function refreshTray() {
   sheetBody.innerHTML = ''; renderBuildTray(sheetBody);
   const nc = sheetBody.querySelector('.cards'); if (nc) nc.scrollLeft = sl;
 }
-function drawThumb(cv, type) {
-  const r = Math.min(1.5, window.devicePixelRatio || 1), cw = window.innerWidth >= 700 ? 112 : 96, ch = window.innerWidth >= 700 ? 84 : 72;
-  cv.width = cw * r; cv.height = ch * r;
-  const c = cv.getContext('2d'); c.scale(r, r);
+/* Shop thumbnails: each is vector-drawn ONCE (one per frame tick, never all eight in one click handler), kept in a cache and
+ * afterwards only copied, so opening the build shop does not freeze a low-end phone. */
+const thumbCache = new Map(), thumbQueue = [];
+const thumbSize = () => window.innerWidth >= 700 ? [112, 84] : [96, 72];
+const thumbRatio = () => Math.min(1.25, window.devicePixelRatio || 1);
+function renderThumb(type) {
+  const r = thumbRatio(), [cw, ch] = thumbSize(), key = type + cw + '|' + r;
+  let t = thumbCache.get(key);
+  if (t) return t;
+  t = document.createElement('canvas'); t.width = Math.round(cw * r); t.height = Math.round(ch * r);
+  const c = t.getContext('2d'); c.scale(r, r);
   const it = ITEMS[type], g = c.createLinearGradient(0, 0, 0, ch); g.addColorStop(0, '#d8f0f4'); g.addColorStop(1, '#b8dc86');
   c.fillStyle = g; c.fillRect(0, 0, cw, ch);
   const tw = Math.min(1.84 * cw / (it.w + it.h), ch * .92 / ((it.w + it.h) / 4 + .55 * it.top));
   // footprint centre (w/2, h/2) lands at the horizontal middle; front corner sits near the bottom edge
   const P = makeP(tw, cw / 2 - (it.w - it.h) / 4 * tw, ch * .93 - (it.w + it.h) * tw / 8, (it.w + it.h) / 4);
   drawBuilding(c, P, tw, type, 0, 0, 1, 0);
+  thumbCache.set(key, t);
+  return t;
 }
+function drawThumb(cv, type) {
+  const r = thumbRatio(), [cw, ch] = thumbSize();
+  cv.width = Math.round(cw * r); cv.height = Math.round(ch * r);
+  const paint = () => cv.getContext('2d').drawImage(renderThumb(type), 0, 0);
+  if (thumbCache.has(type + cw + '|' + r)) { paint(); return; }
+  thumbQueue.push(paint);
+  if (thumbQueue.length === 1) setTimeout(pumpThumbs, 0);
+}
+function pumpThumbs() { const f = thumbQueue.shift(); if (f) f(); if (thumbQueue.length) setTimeout(pumpThumbs, 0); }
 function renderExpand(body) {
   const row = document.createElement('div'); row.className = 'expand-info';
   if (S.n >= N_MAX) { row.textContent = '🎉 土地は最大まで広がったよ！'; body.appendChild(row); return; }
@@ -1467,7 +1650,9 @@ function renderExpand(body) {
   const t = document.createElement('span'); t.textContent = `${S.n}×${S.n} → ${S.n + 1}×${S.n + 1}マス（${(S.n + 1) ** 2}マス）／ 開拓点 ${cost} 必要（いま ${S.points}）`; row.appendChild(t);
   const ok = document.createElement('button'); ok.type = 'button'; ok.className = 'ok'; ok.textContent = '拡張する'; ok.disabled = !enough;
   ok.addEventListener('click', doExpand); row.appendChild(ok); body.appendChild(row);
-  const n = document.createElement('p'); n.className = 'note'; n.textContent = enough ? '建物はそのまま。金色の木や茂みが切り開かれて、森がひとつ後ろへ下がるよ。' : `あと ${cost - S.points} 点。「学ぶ」ボタンで開拓点をためよう（サンプルです）。`;
+  const nextFar = farBank(S.n + 1), curFar = farBank(S.n);
+  const bridgeNote = !nextFar ? (S.n + 1 < FAR_FROM ? `川に橋がかかるのは${FAR_FROM}×${FAR_FROM}のとき（あと${FAR_FROM - S.n}回の拡張）。` : '') : !curFar ? '川に橋がかかって、対岸の草地（12マス）も使えるようになるよ！' : '対岸の草地もひとマス列ぶん広がるよ。';
+  const n = document.createElement('p'); n.className = 'note'; n.textContent = (enough ? '建物はそのまま。金色の木や茂みが切り開かれて、森がひとつ後ろへ下がるよ。' : `あと ${cost - S.points} 点。「学ぶ」ボタンで開拓点をためよう（サンプルです）。`) + ' ' + bridgeNote;
   body.appendChild(n);
 }
 const STUDY = {
@@ -1511,25 +1696,26 @@ function doExpand() {
   if (S.n >= N_MAX) return;
   const cost = EXPAND_COST[S.n + 1];
   if (S.points < cost) { toast('開拓点が足りないよ'); return; }
-  // 1) what is painted right now and will be cleared by the new size (measured in the current view)
-  const oldN = S.n, newN = oldN + 1, P0 = curP(), tw0 = view.tw, lp0 = landPoly(P0, tw0, .25), now = performance.now();
-  const cleared = wild.map(o => ({o, info: wildInfo(o, P0, tw0, lp0, oldN)})).filter(q => q.info && q.info.type !== 'stump' && !wildVisible(q.o, newN));
-  // 2) the land itself grows; the camera eases out to fit it
+  if (trans) return;                                   // one expansion animation at a time
+  const oldN = S.n, newN = oldN + 1;
+  // 1) freeze the picture the player sees now ("before") into a reusable offscreen layer: one blit of the cached ground + sprites
+  ensureStatic(); ensureOrder();
+  if (!tcv) tcv = [makeLayer(), makeLayer()];
+  composeInto(tcv[0]);
+  const a = Object.assign({}, view);
+  // 2) the land itself grows. The new base + live cameras are computed and the live camera SNAPS (no per-frame easing of a forest)
   S.points -= cost; S.n = newN;
-  updateHUD(); layout();
-  // 3) feedback: new tiles flash outward from the centre, trees shrink away with leaf puffs, the painted forest recedes
-  const lo = loOf(newN), c = oldN / 2 + loOf(oldN), tiles = [];
-  for (let x = lo; x < lo + newN; x++) for (let y = lo; y < lo + newN; y++) {
-    if (x >= loOf(oldN) && x < loOf(oldN) + oldN && y >= loOf(oldN) && y < loOf(oldN) + oldN) continue;
-    tiles.push({x, y, delay: Math.hypot(x + .5 - c, y + .5 - c) * .09, sx: .3 + ((x * 7 + y * 3) % 5) * .1, sy: .3 + ((x * 3 + y * 7) % 5) * .1});
-  }
-  fx = {t0: now, tiles, span: tiles.reduce((m, t) => Math.max(m, t.delay), 0), r0: oldN / 2 + clearPad(oldN - N_MIN) * .6};
-  fxGhosts.length = 0;
-  cleared.forEach(q => fxGhosts.push({o: q.o, type: q.info.type, t0: now}));
-  if (!reduced) cleared.slice(0, 40).forEach(q => spawnSparks(q.info.p[0], q.info.p[1] - q.info.s * .35, 2, ['#bfe58a', '#fffbd0', '#8fc96a']));
-  spawnSparks(view.cx, view.cy, 24, ['#ffe08a', '#fff', '#b9e48d']);
+  updateHUD(); layout(); Object.assign(view, tgt);
   bgPrev = bg; bgFade = reduced ? 0 : 1; bg = buildBackdrop(W, H, dpr, stageOf(newN)); if (reduced) bgPrev = null;
-  toast(`🌱 森を切り開いて、土地が ${S.n * S.n} マスに広がったよ！`);
+  // 3) the heavy one-off work (ground layer for the new size + "after" image) runs on the NEXT frame, so the tap is acknowledged first
+  trans = {phase: 0, before: tcv[0], after: tcv[1], a, b: Object.assign({}, view), dur: reduced ? 1 : 1100, t0: 0};
+  if (!reduced) {
+    const m = curP()(view.c, view.c);
+    spawnSparks(m[0], m[1], 16, ['#ffe08a', '#fff', '#b9e48d']);
+    if (newN === FAR_FROM) { const q = curP()(-1, BRIDGE.y + .5); spawnSparks(q[0], q[1], 14, ['#fff3b0', '#ffffff', '#ffd27a']); }
+  }
+  const fb = farBank(newN);
+  toast(newN === FAR_FROM ? '🌉 川に橋がかかって、対岸の草地が使えるようになったよ！' : fb ? `🌱 土地が ${S.n * S.n} マス＋対岸 ${(fb.x1 - fb.x0) * (fb.y1 - fb.y0)} マスに広がったよ！` : `🌱 森を切り開いて、土地が ${S.n * S.n} マスに広がったよ！`);
   sheetBody.innerHTML = ''; renderExpand(sheetBody); markDirty();
 }
 function setGhost(tile) {
@@ -1628,7 +1814,7 @@ function startMoveFor(id) {
 
 /* ----- input ----- */
 function onTap(px, py) {
-  if (!$('modal').hidden) return;
+  if (!$('modal').hidden || trans) return;          // a dialog is open, or the expand transition is still running (positions are moving)
   const hit = hitBuilding(px, py), tile = tileAt(px, py);
   const inGhost = () => { if (!ui.ghost) return false; const type = ui.mode === 'move' ? (S.blds.find(q => q.id === ui.moveId) || {}).type : ui.buildType; if (!type || !tile) return false; const it = ITEMS[type]; return tile.x >= ui.ghost.x && tile.x < ui.ghost.x + it.w && tile.y >= ui.ghost.y && tile.y < ui.ghost.y + it.h; };
   switch (ui.mode) {
@@ -1675,7 +1861,7 @@ canvas.addEventListener('pointerdown', e => {
   if (down && down.id !== e.pointerId) { clearHold(); down = null; return; }           // second finger: abandon
   down = {x: e.clientX, y: e.clientY, t: performance.now(), id: e.pointerId, fired: false, timer: 0};
   try { canvas.setPointerCapture(e.pointerId); } catch (_) { /* capture keeps pointerup coming to us after a long press */ }
-  if (ui.mode === 'explore' && !ui.lifted && $('modal').hidden) {
+  if (ui.mode === 'explore' && !ui.lifted && $('modal').hidden && !trans) {
     const hit = hitBuilding(e.clientX, e.clientY);
     if (hit) {
       ui.hold = {id: hit.id, t0: performance.now()}; markDirty();
@@ -1699,12 +1885,17 @@ document.addEventListener('visibilitychange', () => {
   if (document.hidden) { if (rafId) { cancelAnimationFrame(rafId); rafId = 0; } if (ui.lifted) enterMode('explore'); }
   else { last = 0; lastDrawAt = 0; markDirty(); }
 });
-['pointerdown', 'pointermove', 'keydown'].forEach(n => window.addEventListener(n, wake, {passive: true, capture: true}));
+(FAST ? ['pointerdown', 'keydown'] : ['pointerdown', 'pointermove', 'keydown']).forEach(n => window.addEventListener(n, wake, {passive: true, capture: true}));    // fast mode: a moving finger alone never starts a render loop
+let hoverKey = '';
 canvas.addEventListener('pointermove', e => {
   if (down && down.id === e.pointerId && !down.fired && Math.hypot(e.clientX - down.x, e.clientY - down.y) > HOLD_SLOP) clearHold();   // finger drifted: not a long press
-  if (e.pointerType !== 'mouse' || e.buttons) return;               // mouse hover preview
-  if (ui.mode === 'build' && ui.buildType && !($('modal').hidden === false)) { const t = tileAt(e.clientX, e.clientY); if (t) setGhost(t); }
-  else if (ui.mode === 'move' && ui.moveId) { const t = tileAt(e.clientX, e.clientY); if (t) setGhost(t); }
+  if (e.pointerType !== 'mouse' || e.buttons || trans) return;               // mouse hover preview
+  const hovering = ui.mode === 'build' && ui.buildType && $('modal').hidden ? 1 : ui.mode === 'move' && ui.moveId ? 1 : 0;
+  if (!hovering) return;
+  const t = tileAt(e.clientX, e.clientY);
+  if (!t || hoverKey === ui.mode + t.x + ',' + t.y + (ui.moveId || ui.buildType)) return;       // same tile as last time: nothing to recompute
+  hoverKey = ui.mode + t.x + ',' + t.y + (ui.moveId || ui.buildType);
+  setGhost(t);
 });
 
 /* selection chips */
@@ -1721,9 +1912,11 @@ function updateChips() {
   const b = ui.mode === 'explore' && ui.sel ? S.blds.find(q => q.id === ui.sel) : null;
   chips.hidden = !b || !$('modal').hidden;
   if (b) {
-    // keep the chips clear of the bottom bar / open sheet, and never under the HUD
-    const it = ITEMS[b.type], p = curP()(b.x + it.w / 2, b.y + it.h, 0), lim = area.bottom - 50;
-    chips.style.left = clamp(p[0], 100, W - 100) + 'px'; chips.style.top = clamp(p[1] + 10, area.top, Math.max(area.top, lim)) + 'px';
+    // keep the chips clear of the bottom bar / open sheet, and never under the HUD (style is only written when it changed)
+    const it = ITEMS[b.type], p = curP()(b.x + it.w / 2, b.y + it.h, 0), lim = areaLive.bottom - 50;
+    const l = clamp(p[0], 100, W - 100) + 'px', t = clamp(p[1] + 10, area.top, Math.max(area.top, lim)) + 'px';
+    if (chips.style.left !== l) chips.style.left = l;
+    if (chips.style.top !== t) chips.style.top = t;
   }
 }
 
@@ -1743,8 +1936,8 @@ $('actionCancel').addEventListener('click', () => {
 $('modalOk').addEventListener('click', () => { const id = Number($('modal').dataset.id); $('modal').hidden = true; doStore(id); if (ui.mode !== 'store') { ui.sel = null; } });
 $('modalCancel').addEventListener('click', () => { $('modal').hidden = true; });
 window.addEventListener('keydown', e => { if (e.key === 'Escape') { if (!$('modal').hidden) $('modal').hidden = true; else enterMode('explore'); } });
-window.addEventListener('resize', resize);
-window.addEventListener('orientationchange', () => setTimeout(resize, 200));
+window.addEventListener('resize', resizeSoon);
+window.addEventListener('orientationchange', resizeSoon);
 
 /* ======================================================================
  * 13. Boot
@@ -1755,5 +1948,6 @@ setHint('建物を長押しすると、もちあげて動かせるよ', 7000);
 wake();
 
 // Small read-only-ish hook so automated checks can exercise the rules (in-memory only).
-window.KVDemo = {S, ui, ITEMS, canPlace, visualConflict, silhouette, beginLift, enterMode, onTap, study: k => study(k, document.body), doExpand, tileCenter: (x, y) => curP()(x + .5, y + .5), setGhost, confirmAction, doStore, askStore, wild, wildVisible, clearDist, snap: () => { snapView(); }};
+window.KVDemo = {S, ui, ITEMS, canPlace, visualConflict, silhouette, beginLift, enterMode, onTap, study: k => study(k, document.body), doExpand, tileCenter: (x, y) => curP()(x + .5, y + .5), setGhost, confirmAction, doStore, askStore, wild, wildVisible, clearDist,
+  snap: () => { snapView(); }, inLand, farBank, BRIDGE, perf, quality: FAST ? 'fast' : 'rich', stats: () => ({groundRebuilds: perf.builds, orderRebuilds: perf.orders, sprites: sprites.size, buildingSprites: bsprites.size, canvas: [canvas.width, canvas.height], dpr})};
 })();
