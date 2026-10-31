@@ -1,8 +1,261 @@
-/* Knowledge Village — storybook UI demo.
- * Standalone: no network, no storage, no external libraries.
+/* Knowledge Village — storybook UI demo (v8: real learning loop).
+ * Standalone: no network, no external libraries. Progress is saved ONLY to this demo's own namespaced localStorage key.
  * All artwork is drawn procedurally with the Canvas 2D API (original code-authored drawings).
- * State lives in memory only; reload resets the demo. Rewards are SIMULATED. */
-(() => {
+ *
+ * Part A (KVLearn) is pure logic with no DOM access: question generation, answer checking, reward guards and learning stats.
+ * It is also loadable from Node (`require('./app.js')`) so the README tests can exercise it. Part B is the village UI. */
+const KVLearn = (() => {
+'use strict';
+const SUBJECTS = ['math', 'japanese', 'english'];
+const NEED = {math: 4, japanese: 3, english: 3};           // verified solved questions per subject that a building may require
+const DAILY_MATH_CAP = 30;                                  // rewarded math questions per local day (more is practice, no reward)
+const MAX_WRONG = 3, FACTOR = [1, .6, .3];                  // reward share: no hint & first try / hint or 1 wrong / 2 wrong
+const BASE = {math: {wood: 12, points: 10}, japanese: {books: 3, wood: 2, points: 10}, english: {globe: 2, wood: 2, points: 10}};
+
+function prng(seed) {
+  let a = seed >>> 0;
+  return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+}
+const ri = (r, lo, hi) => lo + Math.floor(r() * (hi - lo + 1));
+const pick = (r, arr) => arr[Math.floor(r() * arr.length)];
+function shuffle(arr, r) { const a = arr.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(r() * (i + 1)); const t = a[i]; a[i] = a[j]; a[j] = t; } return a; }
+const isInt = v => typeof v === 'number' && Number.isFinite(v) && Math.floor(v) === v;
+
+/* ---------------- math word problems (hand-authored templates) ----------------
+ * Each template fixes the operation that SOLVES it. Story words and operation deliberately differ in the "reverse" topics
+ * ("tabetara nokori ..." is an ADDITION, "moratta ... naru" is a SUBTRACTION). Numbers: positive integers, everything <= cap <= 100. */
+const OBJ = [['りんご', 'こ'], ['どんぐり', 'こ'], ['シール', 'まい'], ['えんぴつ', 'ほん'], ['あめ', 'こ'], ['おりがみ', 'まい'], ['ビーだま', 'こ'], ['みかん', 'こ'], ['クッキー', 'まい'], ['きんぎょ', 'ひき']];
+const CH = [['うさぎさん', 'くまさん'], ['りすさん', 'たぬきさん'], ['ことりさん', 'きつねさん'], ['ぞうさん', 'かばさん']];
+const TOPIC = {
+  gather:      {label: 'あわせて・ぜんぶで', op: '+', hint: '「あわせて」「ぜんぶで」は、2つの数を くっつけるよ。くっつけるのは たしざん。絵や ○をかいて かぞえてみよう。'},
+  increase:    {label: 'ふえる・もらう',     op: '+', hint: '「ふえた」「もらった」「のった」は 数が おおきくなるね。はじめの数に あとからの数を たしてみよう。'},
+  compareMore: {label: '〜より おおい',      op: '+', hint: '「〜より ○おおい」は、もとの数から ○ふやした数だよ。もとの数に たしてみよう。'},
+  reverseAdd:  {label: 'ことばと しきがちがう（たし）', op: '+', hint: 'ことばに だまされないで！「たべたら のこりが…」は へったようにみえるけど、たべた分と のこりを くっつけると はじめの数に もどるよ。'},
+  remain:      {label: 'のこり',             op: '-', hint: '「たべた」「あげた」「おりた」は 数が へるね。のこりを しらべるときは、ぜんぶの数から ひいてみよう。'},
+  compare:     {label: 'ちがい',             op: '-', hint: '「ちがい」「どちらが いくつ おおい」は、おおきい数から ちいさい数を ひくよ。ならべて ○をかくと わかりやすいよ。'},
+  reverseSub:  {label: 'ことばと しきがちがう（ひき）', op: '-', hint: 'ことばに だまされないで！「もらったら ○になった」は ふえたようにみえるけど、「はじめの数」を さがすときは ぜんぶの数から あとからの数を ひくよ。'},
+};
+const T = (id, topic, cap, text) => ({id, topic, op: TOPIC[topic].op, cap, text});
+const MATH_TEMPLATES = [
+  // --- addition solves (14) ---
+  T('g1', 'gather', 20, (a, b, o, p, q) => `${p}は ${o[0]}を ${a}${o[1]}、${q}は ${b}${o[1]} もっています。あわせて なん${o[1]}ですか。`),
+  T('g2', 'gather', 30, (a, b, o) => `はこに ${o[0]}が ${a}${o[1]}、かごに ${b}${o[1]} はいっています。ぜんぶで なん${o[1]}ですか。`),
+  T('g3', 'gather', 40, (a, b) => `クラスに 男の子が ${a}人、女の子が ${b}人 います。ぜんぶで なん人 ですか。`),
+  T('g4', 'gather', 30, (a, b, o) => `赤い ${o[0]}が ${a}${o[1]}、白い ${o[0]}が ${b}${o[1]} あります。ぜんぶで なん${o[1]}ですか。`),
+  T('g5', 'gather', 50, (a, b) => `ひもを ${a}cm と ${b}cm、つなぎました。ぜんぶで なんcm ですか。`),
+  T('g6', 'gather', 100, (a, b) => `${a}円の ガムと ${b}円の ラムネを かいます。あわせて なん円ですか。`),
+  T('i1', 'increase', 20, (a, b, o, p) => `${p}は ${o[0]}を ${a}${o[1]} もっていました。${b}${o[1]} もらいました。ぜんぶで なん${o[1]}ですか。`),
+  T('i2', 'increase', 30, (a, b) => `こうえんに こどもが ${a}人 いました。あとから ${b}人 きました。いま なん人 いますか。`),
+  T('i3', 'increase', 60, (a, b) => `バスに ${a}人 のっていました。つぎの ていりゅうじょで ${b}人 のりました。バスには なん人 のっていますか。`),
+  T('m1', 'compareMore', 30, (a, b, o, p, q) => `${p}は ${o[0]}を ${a}${o[1]} もっています。${q}は ${p}より ${b}${o[1]} おおく もっています。${q}は なん${o[1]}ですか。`),
+  T('m2', 'compareMore', 50, (a, b) => `あかチームは ${a}てん です。しろチームは あかチームより ${b}てん おおいです。しろチームは なんてんですか。`),
+  T('ra1', 'reverseAdd', 30, (a, b, o) => `${o[0]}が なんこか ありました。${a}${o[1]} たべたら、のこりが ${b}${o[1]} に なりました。はじめに なん${o[1]} ありましたか。`),
+  T('ra2', 'reverseAdd', 50, (a, b, o) => `ふくろから ${o[0]}を ${a}${o[1]} とりだしたら、ふくろには ${b}${o[1]} のこりました。ふくろには はじめに なん${o[1]} はいっていましたか。`),
+  T('ra3', 'reverseAdd', 40, (a, b, o, p, q) => `${p}は ${q}に ${o[0]}を ${a}${o[1]} あげました。${p}の ${o[0]}は ${b}${o[1]} に なりました。${p}は はじめに なん${o[1]} もっていましたか。`),
+  // --- subtraction solves (14) ---
+  T('r1', 'remain', 20, (a, b, o, p) => `${p}は ${o[0]}を ${a}${o[1]} もっていました。${b}${o[1]} たべました。のこりは なん${o[1]}ですか。`),
+  T('r2', 'remain', 30, (a, b, o) => `${a}${o[1]}の ${o[0]}の うち、${b}${o[1]}を ともだちに あげました。のこりは なん${o[1]}ですか。`),
+  T('r3', 'remain', 50, (a, b) => `バスに ${a}人 のっていました。ていりゅうじょで ${b}人 おりました。バスには いま なん人 のっていますか。`),
+  T('r4', 'remain', 100, (a, b) => `${a}円 もっていました。${b}円の おかしを かいました。のこりは なん円ですか。`),
+  T('r5', 'remain', 99, (a, b) => `${a}ページの ほんを ${b}ページ よみました。まだ よんでいないのは なんページですか。`),
+  T('r6', 'remain', 40, (a, b) => `${a}まいの チケットから ${b}まい つかいました。のこりは なんまい ですか。`),
+  T('c1', 'compare', 30, (a, b, o) => `赤い ${o[0]}が ${a}${o[1]}、白い ${o[0]}が ${b}${o[1]} あります。赤いほうが なん${o[1]} おおいですか。`),
+  T('c2', 'compare', 40, (a, b) => `にんじんが ${a}ほん、ピーマンが ${b}ほん あります。にんじんは ピーマンより なんぼん おおいですか。`),
+  T('c3', 'compare', 50, (a, b, o, p, q) => `${p}は ${o[0]}を ${a}${o[1]} もっています。${q}は ${b}${o[1]} です。${q}は ${p}より なん${o[1]} すくないですか。`),
+  T('c4', 'compare', 60, (a, b) => `ながい ひもは ${a}cm、みじかい ひもは ${b}cm です。ながさの ちがいは なんcm ですか。`),
+  T('c5', 'compare', 99, (a, b) => `あおチームは ${a}てん、きいろチームは ${b}てん です。あおチームは なんてん かっていますか。`),
+  T('rs1', 'reverseSub', 30, (a, b, o, p) => `${p}は ${o[0]}を なんこか もっていました。${b}${o[1]} もらったので、${a}${o[1]} に なりました。はじめに なん${o[1]} もっていましたか。`),
+  T('rs2', 'reverseSub', 50, (a, b, o) => `かごに ${o[0]}を ${b}${o[1]} いれたら、ぜんぶで ${a}${o[1]} に なりました。はじめに かごには なん${o[1]} ありましたか。`),
+  T('rs3', 'reverseSub', 60, (a, b) => `ともだちが ${b}人 きて、ぜんぶで ${a}人 に なりました。はじめは なん人 いましたか。`),
+];
+
+function mathQuestion(tid, seed) {
+  const t = MATH_TEMPLATES.find(x => x.id === tid);
+  if (!t) return null;
+  const r = prng(seed), o = pick(r, OBJ), pq = pick(r, CH);
+  let a, b, ans;
+  for (let k = 0; k < 200; k++) {
+    if (t.op === '+') { a = ri(r, 2, t.cap - 2); b = ri(r, 2, t.cap - a); ans = a + b; if (a === b) continue; }
+    else { a = ri(r, Math.min(8, t.cap), t.cap); b = ri(r, 2, a - 2); ans = a - b; if (ans === b) continue; }
+    break;
+  }
+  const swapped = t.op === '+' ? Math.abs(a - b) : a + b;
+  const ok = v => isInt(v) && v >= 1 && v <= 100 && v !== ans;
+  const ds = [];
+  if (ok(swapped)) ds.push(swapped);                      // the classic mistake: using the other operation
+  shuffle([ans + 1, ans - 1, ans + 10, ans - 10, t.op === '+' ? a : b, ans + 2, ans - 2, ans + 5, ans - 5, ans + 3, ans - 3], r).forEach(v => { if (ok(v) && !ds.includes(v)) ds.push(v); });
+  const choices = shuffle([ans].concat(ds.slice(0, 3)), r);
+  return {subject: 'math', id: t.id, topic: t.topic, op: t.op, nums: [a, b], expr: t.op === '+' ? `${a} + ${b}` : `${a} − ${b}`, answer: ans, choices,
+    text: t.text(a, b, o, pq[0], pq[1]), visual: '', hint: TOPIC[t.topic].hint,
+    explain: `しきは ${t.op === '+' ? a + ' + ' + b : a + ' − ' + b} = ${ans}。こたえは ${ans} だよ。`};
+}
+
+/* ---------------- Japanese (reading) and English (word-picture) — 10 curated items each ----------------
+ * Pictures are system emoji (placeholders). There is NO speech recognition and NO audio in either subject. */
+const JA_ITEMS = [
+  {id: 'ja1', prompt: '「ねこ」は どれ？', visual: '', choices: ['🐱', '🐶', '🐟', '🐦'], answer: '🐱', hint: 'ねこは「にゃーん」となくよ。「ね」で はじまるね。'},
+  {id: 'ja2', prompt: '「さかな」は どれ？', visual: '', choices: ['🐟', '🐰', '🌳', '🍎'], answer: '🐟', hint: 'さかなは みずの なかを およぐよ。'},
+  {id: 'ja3', prompt: '「りんご」は どれ？', visual: '', choices: ['🍎', '🍌', '🍇', '🍊'], answer: '🍎', hint: '「り」で はじまる あかい くだものだよ。'},
+  {id: 'ja4', prompt: '「山」は どう読む？', visual: '⛰️', choices: ['やま', 'かわ', 'そら', 'うみ'], answer: 'やま', hint: '絵を よく見てね。たかく もりあがった ところだよ。'},
+  {id: 'ja5', prompt: '「川」は どう読む？', visual: '🏞️', choices: ['かわ', 'やま', 'はな', 'いし'], answer: 'かわ', hint: '「川」は みずが ながれる ところだよ。'},
+  {id: 'ja6', prompt: '「木」は どう読む？', visual: '🌳', choices: ['き', 'くさ', 'はな', 'いえ'], answer: 'き', hint: 'はっぱが しげる、大きな しょくぶつだよ。'},
+  {id: 'ja7', prompt: '「あか」は どの いろ？', visual: '', choices: ['🔴', '🔵', '🟢', '🟡'], answer: '🔴', hint: 'りんごや トマトの いろだよ。'},
+  {id: 'ja8', prompt: '「うさぎが にんじんを たべます。」 たべるのは だれ？', visual: '🐰🥕', choices: ['うさぎ', 'にんじん', 'ねこ', 'くま'], answer: 'うさぎ', hint: '「〜が」のまえの ことばが、することの 主人公だよ。'},
+  {id: 'ja9', prompt: '「ことりが うたっています。」 なにが うたっていますか？', visual: '🐦🎶', choices: ['ことり', 'ぞう', 'さかな', 'かえる'], answer: 'ことり', hint: '文の はじめを 見てみよう。「〜が」の まえだよ。'},
+  {id: 'ja10', prompt: '「あめが ふってきたので、かさを さしました。」 どうして かさを さしましたか？', visual: '☔', choices: ['あめが ふってきたから', 'ねむいから', 'おなかが すいたから', 'さむいから'], answer: 'あめが ふってきたから', hint: '「〜ので」の まえに りゆうが かいてあるよ。'},
+];
+const EN_ITEMS = [
+  {id: 'en1', prompt: 'この えは どの ことば？', visual: '🐶', choices: ['dog', 'cat', 'bird', 'fish'], answer: 'dog', hint: 'dog は「ワンワン」と なくどうぶつ。d で はじまるよ。'},
+  {id: 'en2', prompt: 'この えは どの ことば？', visual: '🐱', choices: ['cat', 'dog', 'cow', 'pig'], answer: 'cat', hint: 'cat は「ニャー」と なくよ。c で はじまるよ。'},
+  {id: 'en3', prompt: 'この えは どの ことば？', visual: '🍎', choices: ['apple', 'banana', 'grape', 'lemon'], answer: 'apple', hint: 'apple は あかい くだもの。a で はじまるよ。'},
+  {id: 'en4', prompt: 'この えは どの ことば？', visual: '☀️', choices: ['sun', 'moon', 'star', 'rain'], answer: 'sun', hint: 'sun は おひさまのこと。ひるまに かがやくよ。'},
+  {id: 'en5', prompt: 'この えは どの ことば？', visual: '📖', choices: ['book', 'bag', 'box', 'ball'], answer: 'book', hint: 'book は よむもの。b で はじまる ことばが 4つ あるから、えを よく見てね。'},
+  {id: 'en6', prompt: '「water」は どんな いみ？', visual: '', choices: ['みず', 'ひ', 'き', 'そら'], answer: 'みず', hint: 'water は のむ ものだよ。'},
+  {id: 'en7', prompt: '「red」は どの いろ？', visual: '', choices: ['🔴', '🔵', '🟢', '🟡'], answer: '🔴', hint: 'red は りんごの いろ。'},
+  {id: 'en8', prompt: '「three」は いくつ？', visual: '', choices: ['3', '1', '2', '4'], answer: '3', hint: 'one, two, three… 3ばんめの かずだよ。'},
+  {id: 'en9', prompt: '「milk」は どれ？', visual: '', choices: ['🥛', '🍞', '🍚', '🥕'], answer: '🥛', hint: 'milk は ぎゅうにゅうのこと。のみものだよ。'},
+  {id: 'en10', prompt: '「Thank you」は どんな いみ？', visual: '', choices: ['ありがとう', 'さようなら', 'おはよう', 'ごめんなさい'], answer: 'ありがとう', hint: 'うれしい とき、だれかに つたえる ことばだよ。'},
+];
+const ITEMS_OF = {japanese: JA_ITEMS, english: EN_ITEMS};
+function itemQuestion(subject, id, seed) {
+  const it = (ITEMS_OF[subject] || []).find(x => x.id === id);
+  if (!it) return null;
+  return {subject, id: it.id, topic: it.id, op: '', nums: [], expr: '', answer: it.answer, choices: shuffle(it.choices, prng(seed)), text: it.prompt, visual: it.visual, hint: it.hint,
+    explain: `こたえは「${it.answer}」だよ。もういちど 文や えを よく見てみよう。`};
+}
+const build = p => p && (p.subject === 'math' ? mathQuestion(p.tid, p.seed) : itemQuestion(p.subject, p.tid, p.seed));
+
+/* ---------------- learning state ---------------- */
+const zStat = () => ({q: 0, ok: 0, first: 0, hint: 0});
+function newState() {
+  return {v: 1, solved: {math: 0, japanese: 0, english: 0}, stats: {math: zStat(), japanese: zStat(), english: zStat()}, topics: {}, recent: [],
+    daily: {date: '', math: 0, items: {japanese: [], english: []}}, pending: {}, bag: [], rot: {japanese: 0, english: 0}};
+}
+const nn = (v, hi) => isInt(v) && v >= 0 ? Math.min(v, hi == null ? 1e6 : hi) : 0;
+/* Safe migration: unknown / missing / damaged fields fall back to zero. Nothing is invented: older builds persisted no learning
+ * data at all, so there is nothing to carry over and no mastery is ever granted from old button-press counts. */
+function migrateLearn(raw) {
+  const L = newState();
+  if (!raw || typeof raw !== 'object') return L;
+  SUBJECTS.forEach(s => {
+    L.solved[s] = nn(raw.solved && raw.solved[s]);
+    const st = raw.stats && raw.stats[s] || {};
+    L.stats[s] = {q: nn(st.q), ok: nn(st.ok), first: nn(st.first), hint: nn(st.hint)};
+    if (L.stats[s].ok > L.stats[s].q) L.stats[s].ok = L.stats[s].q;
+  });
+  if (raw.topics && typeof raw.topics === 'object') Object.keys(raw.topics).forEach(k => {
+    if (!TOPIC[k]) return; const t = raw.topics[k] || {}; L.topics[k] = {q: nn(t.q), ok: nn(t.ok), first: nn(t.first), hint: nn(t.hint)};
+  });
+  if (Array.isArray(raw.recent)) L.recent = raw.recent.slice(-20).filter(e => e && SUBJECTS.includes(e.s)).map(e => ({s: e.s, t: String(e.t || '').slice(0, 16), ok: !!e.ok, hint: !!e.hint, w: nn(e.w, 3), d: String(e.d || '').slice(0, 10)}));
+  const d = raw.daily || {};
+  L.daily = {date: typeof d.date === 'string' ? d.date.slice(0, 10) : '', math: nn(d.math, 1000), items: {japanese: [], english: []}};
+  ['japanese', 'english'].forEach(s => { const a = d.items && d.items[s]; if (Array.isArray(a)) L.daily.items[s] = a.filter(x => ITEMS_OF[s].some(i => i.id === x)); });
+  if (Array.isArray(raw.bag)) L.bag = raw.bag.filter(x => MATH_TEMPLATES.some(t => t.id === x));
+  ['japanese', 'english'].forEach(s => { L.rot[s] = nn(raw.rot && raw.rot[s], 1000); });
+  if (raw.pending && typeof raw.pending === 'object') SUBJECTS.forEach(s => {
+    const p = raw.pending[s];
+    if (!p || p.subject !== s || !isInt(p.seed) || typeof p.tid !== 'string') return;
+    const np = {subject: s, tid: p.tid, seed: p.seed >>> 0, wrong: Array.isArray(p.wrong) ? p.wrong.slice(0, MAX_WRONG) : [], hint: p.hint ? 1 : 0, done: !!p.done, ok: !!p.ok,
+      rewarded: !!p.rewarded, paid: !!p.paid, reward: null, practice: !!p.practice};
+    const q = build(np);
+    if (!q) return;
+    np.wrong = np.wrong.filter(v => q.choices.includes(v));
+    if (np.rewarded && p.reward && typeof p.reward === 'object') np.reward = rewardFor(s, nn(p.reward.level, 2));      // a stored reward can only be one the rules could have produced
+    else np.rewarded = false;
+    if (np.done && np.ok && !np.rewarded) np.practice = true;
+    L.pending[s] = np;
+  });
+  return L;
+}
+function today(d) { d = d || new Date(); const z = n => (n < 10 ? '0' : '') + n; return d.getFullYear() + '-' + z(d.getMonth() + 1) + '-' + z(d.getDate()); }
+function rollDay(L, day) { if (L.daily.date !== day) L.daily = {date: day, math: 0, items: {japanese: [], english: []}}; }
+function rewardable(L, subject, id, day) {
+  const d = L.daily.date === day ? L.daily : {math: 0, items: {japanese: [], english: []}};
+  return subject === 'math' ? d.math < DAILY_MATH_CAP : !d.items[subject].includes(id);
+}
+function current(L, subject) { return L.pending[subject] || null; }
+function next(L, subject, day, seed) {
+  const cur = L.pending[subject];
+  if (cur && !cur.done) return cur;                         // an unfinished question cannot be re-rolled by leaving and coming back
+  rollDay(L, day);
+  const sd = (isInt(seed) ? seed : Math.floor(Math.random() * 4294967296)) >>> 0, r = prng(sd ^ 0x9e3779b9);
+  let tid;
+  if (subject === 'math') {
+    if (!L.bag.length) { L.bag = shuffle(MATH_TEMPLATES.map(t => t.id), r); if (cur && L.bag[0] === cur.tid) L.bag.push(L.bag.shift()); }
+    tid = L.bag.shift();
+  } else {
+    const items = ITEMS_OF[subject], rot = L.rot[subject] % items.length;
+    const order = items.map((_, i) => items[(rot + i) % items.length]);
+    const it = order.find(i => !L.daily.items[subject].includes(i.id)) || order[0];
+    L.rot[subject] = (items.indexOf(it) + 1) % items.length;
+    tid = it.id;
+  }
+  const p = {subject, tid, seed: sd, wrong: [], hint: 0, done: false, ok: false, rewarded: false, paid: false, reward: null, practice: !rewardable(L, subject, tid, day)};
+  L.pending[subject] = p;
+  return p;
+}
+const levelOf = p => Math.min(2, Math.max(p.hint ? 1 : 0, p.wrong.length));
+function rewardFor(subject, level) {
+  const b = BASE[subject], f = FACTOR[level], gain = {};
+  Object.keys(b).forEach(k => { if (k !== 'points') gain[k] = Math.max(1, Math.round(b[k] * f)); });
+  return {gain, points: Math.max(1, Math.round(b.points * f)), level};
+}
+function useHint(L, subject) { const p = L.pending[subject]; if (!p || p.done) return null; p.hint = 1; return build(p).hint; }
+function record(L, p, q, ok) {
+  const clean = ok && !p.hint && !p.wrong.length;
+  const s = L.stats[p.subject]; s.q++; if (ok) s.ok++; if (clean) s.first++; if (p.hint) s.hint++;
+  if (p.subject === 'math') { const t = L.topics[q.topic] || (L.topics[q.topic] = zStat()); t.q++; if (ok) t.ok++; if (clean) t.first++; if (p.hint) t.hint++; }
+  L.recent.push({s: p.subject, t: q.topic, ok, hint: !!p.hint, w: p.wrong.length, d: L.daily.date}); if (L.recent.length > 20) L.recent.shift();
+}
+/* The one place a result is decided. `done` is set BEFORE anything is granted, so a double tap, a re-render or a reload (the
+ * pending question is persisted) cannot score the same question twice; a wrong choice tapped again is ignored. */
+function answer(L, subject, value, day) {
+  const p = L.pending[subject];
+  if (!p || p.done) return {ignored: 'closed'};
+  const q = build(p);
+  if (!q || !q.choices.includes(value)) return {ignored: 'invalid'};
+  if (p.wrong.includes(value)) return {ignored: 'repeat'};
+  rollDay(L, day);
+  if (value === q.answer) {
+    p.done = true; p.ok = true;
+    const level = levelOf(p);
+    if (rewardable(L, subject, p.tid, day)) {
+      p.rewarded = true; p.reward = rewardFor(subject, level); L.solved[subject]++;
+      if (subject === 'math') L.daily.math++; else L.daily.items[subject].push(p.tid);
+    } else p.practice = true;
+    record(L, p, q, true);
+    return {correct: true, final: true, level, reward: p.reward, practice: !p.rewarded, q};
+  }
+  p.wrong.push(value);
+  if (p.wrong.length >= 2) p.hint = 1;                      // after the 2nd miss the hint is shown automatically
+  if (p.wrong.length >= MAX_WRONG) { p.done = true; p.ok = false; record(L, p, q, false); return {correct: false, final: true, q}; }
+  return {correct: false, final: false, wrong: p.wrong.length, q};
+}
+/* Pays out finished-and-correct questions exactly once (`paid` flag), including one left behind by a crash / reload. */
+function claim(L) {
+  const out = [];
+  SUBJECTS.forEach(s => { const p = L.pending[s]; if (p && p.done && p.ok && p.rewarded && p.reward && !p.paid) { p.paid = true; out.push({subject: s, gain: p.reward.gain, points: p.reward.points, level: p.reward.level}); } });
+  return out;
+}
+function summary(L) {
+  const tot = zStat(); SUBJECTS.forEach(s => Object.keys(tot).forEach(k => { tot[k] += L.stats[s][k]; }));
+  const kind = {'+': zStat(), '-': zStat()};
+  Object.keys(L.topics).forEach(k => { const t = L.topics[k], o = TOPIC[k].op; Object.keys(kind[o]).forEach(f => { kind[o][f] += t[f]; }); });
+  return {total: tot, kind, successRate: tot.q ? tot.ok / tot.q : null, hintRate: tot.q ? tot.hint / tot.q : null};
+}
+function exportStats(L) {      // learning stats only: no village data, no open question, no identifiers
+  return JSON.stringify({app: 'kv-storybook-demo', kind: 'learning-stats', v: 1, solved: L.solved, stats: L.stats, topics: L.topics, recent: L.recent}, null, 1);
+}
+function resetStats(L) {       // stats only. The daily reward guard and the open questions are kept, so a reset cannot re-roll questions or farm rewards
+  const f = newState(); f.daily = L.daily; f.pending = L.pending; f.bag = L.bag; f.rot = L.rot; return f;
+}
+const api = {SUBJECTS, NEED, DAILY_MATH_CAP, MAX_WRONG, FACTOR, TOPIC, MATH_TEMPLATES, JA_ITEMS, EN_ITEMS, mathQuestion, itemQuestion, build, newState, migrateLearn, today, rewardable,
+  current, next, answer, useHint, claim, rewardFor, summary, exportStats, resetStats, levelOf};
+if (typeof module !== 'undefined' && module.exports) module.exports = api;
+return api;
+})();
+
+if (typeof document !== 'undefined') (() => {
 'use strict';
 
 /* ======================================================================
@@ -26,7 +279,7 @@ const ITEMS = {
   hall:        {name: '交流ホール', w: 3, h: 3, cost: {wood: 55, books: 14, globe: 8},  need: ['math', 'japanese', 'english'],    top: 2.4},
 };
 const RES_ICON = {wood: '🪵', books: '📚', globe: '🌍'};
-const SKILL_NEED = 2;               // study each required subject this many times to unlock
+const SKILL_NEED = KVLearn.NEED;    // verified correct answers per subject that a building requires (math 4, Japanese 3, English 3)
 
 /* ---- Cross-river world (v6) ----
  * The river is a fixed feature of the WORLD grid (it runs at gx ~ -1, west of every possible plot) instead of a
@@ -53,6 +306,11 @@ const S = {
   blds: [{id: 1, type: 'house', x: 3, y: 3}],
   stored: {}, nextId: 2,
 };
+/* ---- v8 persistence: ONE namespaced key owned by this demo (the main app's storage is never read or written) ----
+ * `learn` (KVLearn state) is the only source of truth for subject progress; S.skills just mirrors the verified solved counts. */
+const STORE_KEY = 'kv-storybook-demo:v8', SAVE_V = 8;
+let L = KVLearn.newState();
+let storeOK = true, saveBlocked = false, saveTimer = 0, lastSaved = '', storeNote = '';
 const ui = {mode: 'explore', sel: null, buildType: null, ghost: null, moveId: null, lifted: false, hold: null, badAt: 0};
 const M = .12, OV = .08;            // wall inset from the tile edge / roof overhang: roofs stay inside their own footprint
 const LONG_PRESS_MS = 500, HOLD_SLOP = 10;
@@ -1204,7 +1462,7 @@ let dirty = 1, last = 0, rafId = 0, lastDrawAt = 0, lastActive = 0;
  * Ambient motion (clouds, leaves) is throttled and stops after AMBIENT_IDLE_MS without interaction. */
 const AMBIENT_IDLE_MS = 8000, AMBIENT_STEP_MS = 66;
 function wake() { lastActive = performance.now(); if (!rafId && !document.hidden) rafId = requestAnimationFrame(frame); }
-function markDirty() { dirty = 1; wake(); }
+function markDirty() { dirty = 1; wake(); saveSoon(); }
 
 function spawnSparks(x, y, n, cols) {
   n = Math.min(n, FAST ? 8 : 16, 40 - sparks.length);              // a hard cap: particles must never pile up on a slow phone
@@ -1593,7 +1851,8 @@ function canPlace(type, x, y, ignoreId) {
   if (vc) return {ok: false, reason: '屋根や建物がかさなって見えるよ', with: vc.id};
   return {ok: true};
 }
-const isUnlocked = type => ITEMS[type].need.every(k => S.skills[k] >= SKILL_NEED);
+const isUnlocked = type => ITEMS[type].need.every(k => S.skills[k] >= SKILL_NEED[k]);
+const needText = type => ITEMS[type].need.map(k => `${SKILL_NAME[k]}${Math.max(0, SKILL_NEED[k] - S.skills[k])}問`).join('・');
 const canAfford = type => Object.entries(ITEMS[type].cost).every(([k, v]) => S[k] >= v);
 function costText(cost) { return Object.entries(cost).map(([k, v]) => RES_ICON[k] + v).join(' '); }
 
@@ -1637,7 +1896,7 @@ function openSheet(title, render) {
   $('sheetTitle').textContent = title; sheetBody.innerHTML = ''; render(sheetBody);
   sheet.classList.add('open'); layout(); setTimeout(layout, 300);
 }
-function closeSheet() { sheet.classList.remove('open'); layout(); }
+function closeSheet() { sheet.classList.remove('open', 'study-open'); layout(); }
 function showAction(text, okLabel, okEnabled) {
   $('toast').hidden = true;                          // the placement bar (valid or invalid explanation) is the one active message
   actionbar.hidden = false; $('actionText').textContent = text; $('actionOk').textContent = okLabel; $('actionOk').disabled = !okEnabled; layout();
@@ -1656,7 +1915,7 @@ function enterMode(mode) {
   else if (mode === 'move') setHint('動かしたい建物をタップ');
   else if (mode === 'store') setHint('しまいたい建物をタップ');
   else if (mode === 'expand') { setHint('金色のマスが新しく開拓できる土地だよ'); openSheet('🌱 土地を拡張', renderExpand); }
-  else if (mode === 'study') { setHint(''); openSheet('📚 学ぶ（サンプル）', renderStudy); }
+  else if (mode === 'study') { setHint(''); studyView = null; openSheet('📚 まなぶ', renderStudy); sheet.classList.add('study-open'); }
   markDirty();
 }
 
@@ -1671,7 +1930,7 @@ function renderBuildTray(body) {
     drawThumb(cv, type);
     const nm = document.createElement('span'); nm.textContent = it.name; b.appendChild(nm);
     const sm = document.createElement('small');
-    sm.innerHTML = locked ? '🔒 ' + it.need.map(k => SKILL_NAME[k]).join('・') + 'を' + SKILL_NEED + '回' : `${it.w}×${it.h}マス<br>${stock ? 'しまってある ×' + stock : costText(it.cost)}`;
+    sm.innerHTML = locked ? '🔒 あと ' + needText(type) + '<br>せいかい' :`${it.w}×${it.h}マス<br>${stock ? 'しまってある ×' + stock : costText(it.cost)}`;
     b.appendChild(sm);
     if (stock) { const tg = document.createElement('span'); tg.className = 'tag'; tg.textContent = '×' + stock; b.appendChild(tg); }
     b.addEventListener('click', () => chooseBuild(type));
@@ -1683,7 +1942,7 @@ function renderBuildTray(body) {
   body.appendChild(n);
 }
 function chooseBuild(type) {
-  if (!isUnlocked(type)) { toast('🔒 ' + ITEMS[type].need.map(k => SKILL_NAME[k]).join('・') + 'を学ぶと解放されるよ'); return; }
+  if (!isUnlocked(type)) { toast('🔒 「まなぶ」で あと ' + needText(type) + ' せいかいすると 解放されるよ'); return; }
   ui.buildType = type; ui.ghost = null; hideAction();
   setHint(ITEMS[type].name + '：置きたい場所をタップ');
   refreshTray(); markDirty();
@@ -1731,25 +1990,166 @@ function renderExpand(body) {
   ok.addEventListener('click', doExpand); row.appendChild(ok); body.appendChild(row);
   const nextFar = farBank(S.n + 1), curFar = farBank(S.n);
   const bridgeNote = !nextFar ? (S.n + 1 < FAR_FROM ? `川に橋がかかるのは${FAR_FROM}×${FAR_FROM}のとき（あと${FAR_FROM - S.n}回の拡張）。` : '') : !curFar ? '川に橋がかかって、対岸の草地（12マス）も使えるようになるよ！' : '対岸の草地もひとマス列ぶん広がるよ。';
-  const n = document.createElement('p'); n.className = 'note'; n.textContent = (enough ? '建物はそのまま。金色の木や茂みが切り開かれて、森がひとつ後ろへ下がるよ。' : `あと ${cost - S.points} 点。「学ぶ」ボタンで開拓点をためよう（サンプルです）。`) + ' ' + bridgeNote;
+  const n = document.createElement('p'); n.className = 'note'; n.textContent = (enough ? '建物はそのまま。金色の木や茂みが切り開かれて、森がひとつ後ろへ下がるよ。' : `あと ${cost - S.points} 点。「学ぶ」ボタンの もんだいを ただしく とくと 開拓点がたまるよ。`) + ' ' + bridgeNote;
   body.appendChild(n);
 }
-const STUDY = {
-  math:     {icon: '🧮', gain: {wood: 12}, pts: 10, label: '木材'},
-  japanese: {icon: '📖', gain: {books: 3, wood: 2}, pts: 10, label: '本'},
-  english:  {icon: '🔤', gain: {globe: 2, wood: 2}, pts: 10, label: '交流'},
-};
+/* ----- v8 learning sheet: one question at a time; rewards ONLY come out of KVLearn.answer() for a correct choice ----- */
+const SUBJ_ICON = {math: '🧮', japanese: '📖', english: '🔤'};
+const SUBJ_NOTE = {math: '文しょうだいを よんで、たしざんか ひきざんかを かんがえよう。', japanese: 'ひらがな・かん字・みじかい文を よんで えらぼう。（音声認識はありません）', english: 'えと えいごを むすぼう。（音声の よみあげ・認識はありません）'};
+let studyView = null;                                   // null = subject list, otherwise the open subject
+function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+function syncSkills() { KVLearn.SUBJECTS.forEach(k => { S.skills[k] = L.solved[k]; }); }
 function renderStudy(body) {
-  const g = document.createElement('div'); g.className = 'study';
-  Object.keys(STUDY).forEach(k => {
-    const s = STUDY[k], b = document.createElement('button'); b.type = 'button';
-    b.innerHTML = `<span class="big">${s.icon}</span>${SKILL_NAME[k]}<small>${costText(s.gain)} ・開拓点+${s.pts}</small><small>これまで ${S.skills[k]}回</small>`;
-    b.addEventListener('click', () => study(k, b)); g.appendChild(b);
+  body.innerHTML = '';
+  if (studyView) renderQuestion(body, studyView); else renderStudyHome(body);
+}
+function rerenderStudy(keepScroll) {
+  if (ui.mode !== 'study') return;
+  const st = keepScroll ? sheetBody.scrollTop : 0;
+  renderStudy(sheetBody); sheetBody.scrollTop = st; layout();
+}
+function meterEl(k) {
+  const need = SKILL_NEED[k], v = Math.min(L.solved[k], need), m = el('div', 'meter');
+  m.setAttribute('role', 'img'); m.setAttribute('aria-label', `${SKILL_NAME[k]} かいほうまで ${v}/${need}`);
+  const f = el('i'); f.style.width = Math.round(v / need * 100) + '%'; m.appendChild(f);
+  return m;
+}
+function renderStudyHome(body) {
+  const g = el('div', 'study');
+  KVLearn.SUBJECTS.forEach(k => {
+    const b = el('button'); b.type = 'button';
+    b.appendChild(el('span', 'big', SUBJ_ICON[k])); b.appendChild(document.createTextNode(SKILL_NAME[k]));
+    b.appendChild(el('small', '', `せいかい ${L.solved[k]}問`));
+    b.appendChild(meterEl(k));
+    b.addEventListener('click', () => { studyView = k; rerenderStudy(); });
+    g.appendChild(b);
   });
   body.appendChild(g);
-  const n = document.createElement('p'); n.className = 'note';
-  n.textContent = '※ サンプル：ボタンを押すだけで報酬がもらえます。本編の学習記録や進捗には一切つながっていません。';
-  body.appendChild(n);
+  body.appendChild(el('p', 'note', 'ただしく こたえた ときだけ ごほうびがもらえるよ。ゲージは 新しい建物が 使えるようになるまでの せいかい数。'));
+  renderParent(body);
+}
+function pct(a, b) { return b ? Math.round(a / b * 100) + '%' : '—'; }
+function renderParent(body) {
+  const d = el('details', 'parent'), sum = el('summary', '', 'おうちの方へ（学習きろく）'); d.appendChild(sum);
+  const s = KVLearn.summary(L), t = s.total;
+  const rows = [['こたえた問題', `${t.q}問`], ['せいかい', t.q ? `${t.ok}問（${pct(t.ok, t.q)}）` : '—'], ['ヒントなしで 1回でせいかい', t.q ? `${t.first}問` : '—'], ['ヒントを つかった', t.q ? pct(t.hint, t.q) : '—'],
+    ['たしざんで とく問題', s.kind['+'].q ? `${s.kind['+'].ok}/${s.kind['+'].q}問せいかい` : 'まだありません'], ['ひきざんで とく問題', s.kind['-'].q ? `${s.kind['-'].ok}/${s.kind['-'].q}問せいかい` : 'まだありません']];
+  const dl = el('dl', 'stats');
+  rows.forEach(r => { dl.appendChild(el('dt', '', r[0])); dl.appendChild(el('dd', '', r[1])); });
+  d.appendChild(dl);
+  const tk = Object.keys(L.topics).filter(k => L.topics[k].q);
+  if (tk.length) {
+    d.appendChild(el('h4', '', '算数：文のタイプべつ'));
+    const ul = el('ul', 'topics');
+    tk.forEach(k => { const x = L.topics[k]; ul.appendChild(el('li', '', `${KVLearn.TOPIC[k].op === '+' ? '＋' : '−'} ${KVLearn.TOPIC[k].label}：${x.ok}/${x.q}問せいかい（ヒントなし ${x.first}）`)); });
+    d.appendChild(ul);
+  }
+  if (L.recent.length) {
+    d.appendChild(el('h4', '', 'さいきんの 5問'));
+    d.appendChild(el('p', 'recent', L.recent.slice(-5).reverse().map(e => `${SKILL_NAME[e.s]}${e.ok ? '○' : '△'}${e.hint ? '(ヒント)' : ''}`).join('  ')));
+  }
+  if (t.q < 10) d.appendChild(el('p', 'note', 'まだ きろくが すくないので、とくい・にがての 目安は 出していません。'));
+  d.appendChild(el('p', 'note', 'この きろくは この端末の中だけ（ブラウザの保存領域）にあります。本編アプリ・学校・保護者ダッシュボードとは つながっておらず、学力の判定ではありません。' + (storeNote ? ' ' + storeNote : '')));
+  const row = el('div', 'parent-btns');
+  const ex = el('button', '', '記録を書き出す（JSON）'); ex.type = 'button';
+  ex.addEventListener('click', () => {
+    try {
+      const url = URL.createObjectURL(new Blob([KVLearn.exportStats(L)], {type: 'application/json'})), a = document.createElement('a');
+      a.href = url; a.download = 'kv-learning-stats.json'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e) { toast('この端末では書き出せませんでした'); }
+  });
+  const rs = el('button', 'warn', '学習きろくを リセット'); rs.type = 'button';
+  let armed = 0;
+  rs.addEventListener('click', () => {
+    if (!armed) { armed = 1; rs.textContent = 'もう一度おすと けします'; setTimeout(() => { armed = 0; rs.textContent = '学習きろくを リセット'; }, 4000); return; }
+    L = KVLearn.resetStats(L); syncSkills(); saveNow(); toast('学習きろくを リセットしました（街と しげんは そのままです）'); rerenderStudy();
+  });
+  row.appendChild(ex); row.appendChild(rs); d.appendChild(row);
+  d.appendChild(el('p', 'note', 'リセットしても、きょうのごほうびの回数と とちゅうの問題は のこります。街・しげん・建物は けしません。'));
+  body.appendChild(d);
+}
+function rewardText(r) { return costText(r.gain) + ` 開拓点+${r.points}`; }
+function feedbackFor(p, q) {
+  if (!p.done) {
+    if (!p.wrong.length) return {cls: '', text: 'こたえを えらんでね。むずかしかったら 💡ヒントを みてもいいよ。'};
+    if (p.wrong.length === 1) return {cls: 'soft', text: 'おしい！もういちど かんがえてみよう。ヒントも だしてみてね。'};
+    return {cls: 'soft', text: 'あと すこし！ヒントを だしたよ。ゆっくり よんでみよう。'};
+  }
+  if (p.ok) {
+    if (p.rewarded) {
+      const lv = p.reward.level, pre = lv === 0 ? 'せいかい！🎉 すごいね！' : 'せいかい！🎉 さいごまで がんばったね。';
+      return {cls: 'good', text: `${pre} ごほうび：${rewardText(p.reward)}` + (lv ? '（ヒントを つかったので すこしだけ）' : '')};
+    }
+    return {cls: 'good', text: 'せいかい！🎉 きょうの ごほうびは もう もらったので、これは れんしゅうだよ。'};
+  }
+  return {cls: 'soft', text: `いっしょに みてみよう。${q.explain} つぎの もんだいで また ちょうせんしよう。`};
+}
+function renderQuestion(body, subj) {
+  const day = KVLearn.today();
+  let p = KVLearn.current(L, subj);
+  if (!p) { p = KVLearn.next(L, subj, day); saveSoon(); }
+  const q = KVLearn.build(p), box = el('div', 'q');
+  const top = el('div', 'q-top');
+  const back = el('button', 'q-back', '← もどる'); back.type = 'button';
+  back.addEventListener('click', () => { studyView = null; rerenderStudy(); });
+  top.appendChild(back);
+  top.appendChild(el('span', 'q-subj', `${SUBJ_ICON[subj]} ${SKILL_NAME[subj]}`));
+  const prog = el('span', 'q-prog', `かいほう ${Math.min(L.solved[subj], SKILL_NEED[subj])}/${SKILL_NEED[subj]}`); top.appendChild(prog);
+  box.appendChild(top);
+  box.appendChild(meterEl(subj));
+  if (q.visual) box.appendChild(el('div', 'q-visual', q.visual));
+  box.appendChild(el('p', 'q-text', q.text));
+  const long = q.choices.some(c => String(c).length > 6);
+  const ch = el('div', 'q-choices' + (long ? ' long' : ''));
+  q.choices.forEach(c => {
+    const b = el('button', 'q-choice', String(c)); b.type = 'button';
+    const wrong = p.wrong.includes(c), right = p.done && c === q.answer;
+    if (wrong) { b.classList.add('wrong'); b.disabled = true; b.setAttribute('aria-label', String(c) + ' ちがうよ'); }
+    if (right) { b.classList.add('right'); b.setAttribute('aria-label', String(c) + ' せいかい'); }
+    if (p.done) b.disabled = true;
+    b.addEventListener('click', () => onChoice(subj, c));
+    ch.appendChild(b);
+  });
+  box.appendChild(ch);
+  const act = el('div', 'q-actions');
+  const hb = el('button', 'q-hint', '💡 ヒント'); hb.type = 'button'; hb.disabled = p.done || !!p.hint;
+  hb.addEventListener('click', () => { KVLearn.useHint(L, subj); saveSoon(); rerenderStudy(true); });
+  act.appendChild(hb);
+  if (p.done) { const nb = el('button', 'q-next', 'つぎの もんだい ▶'); nb.type = 'button'; nb.addEventListener('click', () => { KVLearn.next(L, subj, KVLearn.today()); saveNow(); rerenderStudy(); }); act.appendChild(nb); }
+  box.appendChild(act);
+  if (p.hint || p.done) box.appendChild(el('p', 'q-hinttext', '💡 ' + q.hint));
+  const fb = feedbackFor(p, q), f = el('p', 'q-fb ' + fb.cls, fb.text); f.setAttribute('role', 'status'); box.appendChild(f);
+  if (!p.done) box.appendChild(el('p', 'note', p.practice ? '※ これは れんしゅう：きょうの ごほうびは もう もらいました。' : SUBJ_NOTE[subj]));
+  body.appendChild(box);
+}
+let answering = false;
+function onChoice(subj, value) {
+  if (answering) return;
+  answering = true;
+  try {
+    const before = Object.keys(ITEMS).filter(isUnlocked);
+    const res = KVLearn.answer(L, subj, value, KVLearn.today());
+    if (res.ignored) return;
+    if (res.correct) {
+      const paid = payPending(true);
+      if (paid) { const anchor = $('hudWood').parentElement.getBoundingClientRect(); spawnSparks(anchor.left + anchor.width / 2, anchor.bottom, 10, ['#ffe08a', '#fff', '#ffb3c6']); }
+      const now = Object.keys(ITEMS).filter(t => isUnlocked(t) && !before.includes(t));
+      if (now.length) setTimeout(() => toast('✨ ' + now.map(t => ITEMS[t].name).join('・') + ' が解放されたよ！'), 700);
+    }
+    saveNow(); rerenderStudy(true);
+  } finally { setTimeout(() => { answering = false; }, 250); }
+}
+/* Pays every finished-and-correct question exactly once (KVLearn.claim flips `paid`). Also runs at boot, so a result that was
+ * decided but not yet paid when the page closed is paid once, never twice. */
+function payPending(animate) {
+  const got = KVLearn.claim(L);
+  got.forEach(r => {
+    const idMap = {wood: 'hudWood', books: 'hudBooks', globe: 'hudGlobe'};
+    Object.entries(r.gain).forEach(([k, v]) => { S[k] += v; if (animate) floatText('+' + v + RES_ICON[k], $(idMap[k]).parentElement); });
+    S.points += r.points; if (animate) floatText('+' + r.points, $('hudPoints').parentElement);
+  });
+  syncSkills(); updateHUD();
+  return got.length > 0;
 }
 
 /* ----- actions ----- */
@@ -1758,19 +2158,53 @@ function floatText(text, el) {
   f.className = 'float'; f.textContent = text; f.style.left = (r.left + r.width / 2) + 'px'; f.style.top = (r.top + r.height) + 'px';
   $('app').appendChild(f); setTimeout(() => f.remove(), 1500);
 }
-function study(k, btn) {
-  const s = STUDY[k];
-  S.skills[k]++; S.points += s.pts;
-  const idMap = {wood: 'hudWood', books: 'hudBooks', globe: 'hudGlobe'};
-  Object.entries(s.gain).forEach(([r, v]) => { S[r] += v; floatText('+' + v + RES_ICON[r], $(idMap[r]).parentElement); });
-  floatText('+' + s.pts, $('hudPoints').parentElement);
-  const r = btn.getBoundingClientRect(); spawnSparks(r.left + r.width / 2, r.top, 10, ['#ffe08a', '#fff', '#ffb3c6']);
-  toast(`${SKILL_NAME[k]}がんばったね！ ${costText(s.gain)} 開拓点+${s.pts}`);
-  updateHUD();
-  sheetBody.innerHTML = ''; renderStudy(sheetBody); markDirty();
-  const newly = Object.keys(ITEMS).filter(t => ITEMS[t].need.length && isUnlocked(t) && ITEMS[t].need.includes(k) && ITEMS[t].need.every(q => S.skills[q] >= SKILL_NEED) && ITEMS[t].need.some(q => q === k && S.skills[q] === SKILL_NEED));
-  if (newly.length) setTimeout(() => toast('✨ ' + newly.map(t => ITEMS[t].name).join('・') + ' が解放されたよ！'), 900);
+/* ----- v8 persistence (own namespaced key; failures never break the game) ----- */
+function snapshot() {
+  return JSON.stringify({v: SAVE_V, village: {n: S.n, wood: S.wood, books: S.books, globe: S.globe, points: S.points, nextId: S.nextId, stored: S.stored,
+    blds: S.blds.map(b => ({id: b.id, type: b.type, x: b.x, y: b.y}))}, learn: L});
 }
+function saveNow() {
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = 0; }
+  if (!storeOK || saveBlocked) return;
+  try { const s = snapshot(); if (s !== lastSaved) { localStorage.setItem(STORE_KEY, s); lastSaved = s; } } catch (e) { storeOK = false; storeNote = '（この端末では保存できません。ページを閉じると きろくは きえます）'; }
+}
+function saveSoon() { if (!saveTimer && storeOK && !saveBlocked) saveTimer = setTimeout(saveNow, 600); }
+const ci = (v, lo, hi, d) => typeof v === 'number' && isFinite(v) ? clamp(Math.floor(v), lo, hi) : d;
+/* Village data is validated field by field. Buildings that no longer fit (bad type, outside the land, overlapping tiles) are
+ * moved into the stored inventory instead of being deleted, so a damaged save never silently destroys a build. */
+function applyVillage(v) {
+  if (!v || typeof v !== 'object') return;
+  S.n = ci(v.n, N_MIN, N_MAX, N_MIN);
+  S.wood = ci(v.wood, 0, 99999, S.wood); S.books = ci(v.books, 0, 99999, S.books); S.globe = ci(v.globe, 0, 99999, S.globe); S.points = ci(v.points, 0, 99999, S.points);
+  S.stored = {};
+  if (v.stored && typeof v.stored === 'object') Object.keys(ITEMS).forEach(t => { const c = ci(v.stored[t], 0, 99, 0); if (c) S.stored[t] = c; });
+  S.blds = []; let maxId = 1;
+  if (Array.isArray(v.blds)) v.blds.slice(0, 200).forEach(b => {
+    if (!b || !ITEMS[b.type]) return;
+    const x = ci(b.x, -20, 40, null), y = ci(b.y, -20, 40, null), id = ci(b.id, 1, 1e6, null);
+    if (x == null || y == null || id == null || S.blds.some(q => q.id === id)) { S.stored[b.type] = (S.stored[b.type] || 0) + 1; return; }
+    const it = ITEMS[b.type], occ = occupiedMap(), bad = (() => { for (let dx = 0; dx < it.w; dx++) for (let dy = 0; dy < it.h; dy++) if (!inLand(x + dx, y + dy) || occ[(x + dx) + ',' + (y + dy)] !== undefined) return true; return false; })();
+    if (bad) { S.stored[b.type] = (S.stored[b.type] || 0) + 1; return; }
+    S.blds.push({id, type: b.type, x, y}); maxId = Math.max(maxId, id);
+  });
+  S.nextId = Math.max(ci(v.nextId, 2, 1e6, 2), maxId + 1);
+}
+function loadSave() {
+  let raw = null;
+  try { raw = localStorage.getItem(STORE_KEY); } catch (e) { storeOK = false; storeNote = '（この端末では保存できません。ページを閉じると きろくは きえます）'; return; }
+  if (!raw) return;                                                  // first run: nothing to migrate, defaults stay
+  let data = null;
+  try { data = JSON.parse(raw); } catch (e) { data = null; }
+  if (!data || typeof data !== 'object') {                           // damaged: keep a copy for a human, start clean
+    try { localStorage.setItem(STORE_KEY + ':damaged', raw.slice(0, 200000)); } catch (e) { /* ignore */ }
+    return;
+  }
+  if (typeof data.v === 'number' && data.v > SAVE_V) { saveBlocked = true; storeNote = '（新しい版の保存データが あるため、この版では 保存しません）'; return; }
+  applyVillage(data.village);
+  L = KVLearn.migrateLearn(data.learn);                              // old / missing learn data -> zero mastery, never invented
+  lastSaved = raw;
+}
+window.addEventListener('pagehide', saveNow);
 function doExpand() {
   if (S.n >= N_MAX) return;
   const cost = EXPAND_COST[S.n + 1];
@@ -2021,12 +2455,13 @@ window.addEventListener('orientationchange', resizeSoon);
 /* ======================================================================
  * 13. Boot
  * ==================================================================== */
+loadSave(); syncSkills(); payPending(false);
 updateHUD(); setPressed();
 resize();
 setHint('建物を長押しすると、もちあげて動かせるよ', 7000);
 wake();
 
 // Small read-only-ish hook so automated checks can exercise the rules (in-memory only).
-window.KVDemo = {S, ui, ITEMS, canPlace, visualConflict, silhouette, beginLift, enterMode, onTap, study: k => study(k, document.body), doExpand, tileCenter: (x, y) => curP()(x + .5, y + .5), setGhost, confirmAction, doStore, askStore, wild, wildVisible, clearDist,
+window.KVDemo = {S, ui, ITEMS, canPlace, visualConflict, silhouette, beginLift, enterMode, onTap, learn: KVLearn, getL: () => L, answer: (k, v) => onChoice(k, v), doExpand, tileCenter: (x, y) => curP()(x + .5, y + .5), setGhost, confirmAction, doStore, askStore, wild, wildVisible, clearDist,
   snap: () => { snapView(); }, inLand, farBank, BRIDGE, perf, quality: FAST ? 'fast' : 'rich', stats: () => ({groundRebuilds: perf.builds, orderRebuilds: perf.orders, sprites: sprites.size, buildingSprites: bsprites.size, canvas: [canvas.width, canvas.height], dpr})};
 })();

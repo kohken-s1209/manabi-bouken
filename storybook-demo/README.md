@@ -7,9 +7,64 @@ Files: `index.html`, `style.css`, `app.js` (plus this README). `IMPLEMENTATION_B
 
 ## Safety / isolation
 - No network requests, no external fonts/scripts/images, no secrets, no analytics.
-- **No `localStorage`/`sessionStorage`/cookies are read or written.** It cannot see child progress or the main game's saved data. All state is in memory; reloading resets the demo.
-- Study rewards are **simulated** — buttons just add currency in this page. Nothing is recorded anywhere.
+- **Storage (v8):** exactly one `localStorage` key, `kv-storybook-demo:v8` (plus a `…:damaged` copy only if a save could not be parsed). The main app's storage is never read or written; no cookies, no `sessionStorage`. If storage is blocked, the demo works in memory and says so in the parent panel.
+- Rewards (v8) come only from correctly answered questions — see the v8 section. The old "press a button, get resources" study buttons are gone.
 - Nothing outside `storybook-demo/` was touched.
+
+## v8 changes (from `V8_FEEDBACK.md`) — a real learning loop
+**Verification status — read first:** written and re-read by hand only. In this sandbox `node` and a browser were **not approved / not available**, so **none of the code or the tests below has been executed** and nothing has been seen on a phone or tablet. Run the checks in "Desktop checks" before relying on it. Nothing here claims curriculum alignment, adaptive difficulty, parent-dashboard sync or a validated mastery measure.
+
+**Scope note:** the task text also mentioned footprint/overlap rework, long-press selection with cancel, foreground vegetation and "graphics richness". `V8_FEEDBACK.md` lists none of them, so they were **not changed** (they already exist from v2–v6: tile-footprint → bounding-box → silhouette collision with depth order, long-press lift → destination tap → cancel, side-strip-only low foreground plants with a free centre). Existing art was left alone; no claim is made that it matches any raster screenshot.
+
+### What changed
+- **Study sheet = real questions (`KVLearn` at the top of `app.js`, pure logic, no DOM).**
+  - **Math:** 28 hand-authored word-problem templates (14 solved by addition, 14 by subtraction) in 7 topics: あわせて, ふえる, 〜よりおおい, のこり, ちがい, and two "words vs operation" topics (`reverseAdd`: "たべたら のこりが…" → add; `reverseSub`: "もらったら ○に なった、はじめは?" → subtract). Numbers are random bounded positive integers (≤ 100, per-template caps of 20–100), 4 large answer choices (the answer, the "other operation" distractor, and near misses), exactly one correct, answer never equal to the other given number.
+  - **Japanese:** 10 curated kana / kanji-reading / short-sentence items. **English:** 10 word–picture / meaning items. Pictures are system **emoji (placeholders)**. **No speech recognition and no audio** in either subject (stated in the sheet).
+  - One question at a time, large (≥ 44 px; choices 56 px) targets, 💡ヒント (never contains the answer), wrong choices grey out and cannot be re-tapped, the 2nd miss shows the hint automatically, the 3rd miss shows the worked answer (no reward, warm text, "next" is always available — no dead end). All blocks (question, choices, buttons, hint, feedback) are in normal flow inside the sheet, so they cannot overlap; no modal is opened over the sheet.
+- **Rewards only for a correct answer.** Same base amounts as before (算数 🪵12, 国語 📚3+🪵2, 英語 🌍2+🪵2, each 開拓点+10), scaled by how it was solved: no hint & first try 100 %, hint used or one miss 60 %, two misses 30 % (each resource at least 1). Three misses = no reward. Guards: `answer()` sets `done` before granting; `claim()` pays each result once (`paid` flag, also at boot for a result decided but not yet paid); a pending question is saved and **resumed after reload or leaving the sheet** (misses/hints are kept, so it cannot be re-rolled); math: 30 rewarded questions per local day, Japanese/English: each item rewarded once per local day — beyond that it is labelled "れんしゅう" with no reward and no unlock credit. "Reset learning stats" keeps the daily counters and open questions. Limit: the device clock can be changed to reset the daily counters; this is a local prototype, not a security boundary.
+- **Unlocking uses verified solved counts** (`KVLearn.NEED`: 算数 4, 国語 3, 英語 3 rewarded-correct answers). `S.skills` is only a mirror of those counts. Old builds persisted nothing, so there is no old button-press count to migrate and **no mastery is granted from it**. Buildings already placed are never removed if a count is later reset.
+- **Progress tracking & parent panel** ("おうちの方へ" in the study sheet): questions, correct, first-try-without-hint, hint rate, addition vs subtraction accuracy, per-topic counts, last 5 results. Small samples (< 10 answers) say so instead of rating the child. Optional **export (JSON of learning stats only)** via a local file download and **reset of learning stats only** (two taps). No names, no identifiers, no network.
+- **Persistence & migration.** Village (land size, resources, 開拓点, buildings, stored buildings) and learning state are saved to the single namespaced key (debounced, plus on `pagehide`). On load every field is validated and clamped; unknown fields are ignored; buildings that do not fit (unknown type, outside land, overlapping tiles) go to the stored inventory rather than being deleted; a save from a newer version is left untouched (saving is disabled); unparsable data is copied to `…:damaged` and defaults are used.
+- **Performance:** the cached ground layer, sprite atlas and loop are untouched. The learning UI is plain DOM (no canvas animation, no fetches, no timers beyond a 600 ms save debounce). Main app untouched; water flow remains out of scope.
+
+### Desktop checks (not yet run — please run)
+```
+node --check storybook-demo/app.js
+node -e "const K=require('./storybook-demo/app.js');
+let bad=[];for(const t of K.MATH_TEMPLATES)for(let s=1;s<=2000;s++){const q=K.mathQuestion(t.id,s*7919),[a,b]=q.nums,e=t.op==='+'?a+b:a-b;
+ if(e!==q.answer||q.answer<1||q.answer>100||a>100||b<1||q.choices.length!==4||new Set(q.choices).size!==4||q.choices.filter(c=>c===q.answer).length!==1||!q.choices.every(c=>Number.isInteger(c)&&c>=1&&c<=100)||!q.text.includes(String(a))||!q.text.includes(String(b))||q.answer===b)bad.push(t.id+':'+s)}
+ console.log('templates',K.MATH_TEMPLATES.length,'(need >=25) bad',bad.length,bad.slice(0,5));
+ for(const s of ['japanese','english']){const it=s==='japanese'?K.JA_ITEMS:K.EN_ITEMS;console.log(s,it.length,it.every(i=>i.choices.includes(i.answer)&&new Set(i.choices).size===i.choices.length))}
+ // reward guards
+ let L=K.newState(),D='2026-01-01',p=K.next(L,'math',D,5),q=K.build(p);
+ let r=K.answer(L,'math',q.answer,D);console.log('first try full',r.correct&&r.level===0&&r.reward.gain.wood===12);
+ console.log('double answer ignored',!!K.answer(L,'math',q.answer,D).ignored,'claim once',K.claim(L).length===1&&K.claim(L).length===0);
+ L=K.newState();p=K.next(L,'math',D,6);q=K.build(p);const w=q.choices.find(c=>c!==q.answer);
+ K.answer(L,'math',w,D);console.log('repeat wrong ignored',!!K.answer(L,'math',w,D).ignored);
+ r=K.answer(L,'math',q.answer,D);console.log('one miss -> 60%',r.level===1&&r.reward.gain.wood===7);
+ L=K.newState();p=K.next(L,'math',D,7);q=K.build(p);q.choices.filter(c=>c!==q.answer).forEach(c=>K.answer(L,'math',c,D));
+ console.log('3 misses no reward / no unlock credit',p.done&&!p.ok&&L.solved.math===0&&K.claim(L).length===0);
+ L=K.newState();p=K.next(L,'math',D,8);console.log('no re-roll of open question',K.next(L,'math',D,9)===p);
+ L=K.migrateLearn(JSON.parse(JSON.stringify(L)));console.log('pending survives reload',!!K.current(L,'math'));
+ L=K.newState();for(let i=0;i<K.DAILY_MATH_CAP+3;i++){const pp=K.next(L,'math',D,100+i);K.answer(L,'math',K.build(pp).answer,D)}
+ console.log('daily cap',L.solved.math===K.DAILY_MATH_CAP);
+ console.log('garbage migrates to zero',JSON.stringify(K.migrateLearn({solved:{math:-5,japanese:'x'},skills:{math:99}}).solved));
+"
+```
+Expected output: `bad 0`, `templates 28`, both item sets `true`, and every guard line `true` (`{"math":0,"japanese":0,"english":0}` for the last one).
+
+### Manual QA checklist
+1. Open `index.html` on a 360×640 phone viewport, a 390 px phone and a tablet. Tap 学ぶ: three subject buttons, meters, parent panel closed.
+2. 算数: question fits (scroll inside the sheet if needed), 4 choices ≥ 56 px, hint button, feedback box; nothing overlaps at any state (fresh / 1 miss / hint open / solved / revealed).
+3. Solve without hint → HUD floats `+🪵12`, `+10`; solve with hint → smaller amounts; miss three times → worked answer, no reward, "つぎの もんだい" works.
+4. Reload mid-question: the same question returns with the same misses/hint; reload after solving: no second reward.
+5. Rapidly double-tap a correct choice: one reward. Tap a greyed choice: nothing happens.
+6. 国語 / 英語: 10 items each; each rewards once per day; afterwards "れんしゅう" and no reward. Text says no speech recognition.
+7. Build tray: locked buildings say 「あと 算数4問 せいかい」 etc.; after enough correct answers they unlock (toast appears above the sheet).
+8. Parent panel: counts match what you did; export downloads a JSON with stats only; reset needs two taps and keeps village, resources and buildings.
+9. Build, move (long-press → destination tap → やめる), store, expand to 49 tiles (bridge) → reload: village restored exactly.
+10. DevTools → Application: only `kv-storybook-demo:v8` exists; Network: no requests; set storage to "blocked" (private mode): demo still works and the parent panel notes it.
+11. `?perf=1`: no new per-frame cost while the sheet is open (the learning UI is DOM only).
 
 ## v7 changes (from `V7_FEEDBACK.md`) — gentle animated river only
 **Verification status — read first:** `node --check` was **not run** (the sandbox required approval that was not granted), and no browser or phone was available. The code is re-read by hand only. Smoothness on the owner's Android device, and whether the flow looks right, **need the owner's confirmation**. Run `node --check storybook-demo/app.js`, then open `index.html?perf=1`.
