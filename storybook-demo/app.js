@@ -422,7 +422,7 @@ function pickKind(v) { return v < .56 ? 0 : v < .68 ? 1 : v < .82 ? 2 : v < .91 
 /* ======================================================================
  * 6. Water — waterfall cliff, pool and stream (hugs the land plot)
  * ==================================================================== */
-let streamPts = [], bridgePts = [];
+let streamPts = [], bridgePts = [], riverMeta = null, bridgeBox = null;
 /* The river is sampled from the WORLD curve riverGX(gy) and projected with the base camera, so it is the same river at
  * every size: the plot grows toward it and (from 49 tiles) a bridge crosses it. Samples double as the keep-out line for scenery. */
 function drawWater(P) {
@@ -430,6 +430,7 @@ function drawWater(P) {
   const wdt = clamp(tw * .46, 12, 62);
   const ch = Math.max(tw * 1.9, H * .13), cw = tw * 1.5, yMin = area.top + ch + 10;
   const pts = [];
+  riverMeta = null;
   for (let gy = -9; gy <= 26; gy += .25) {
     const p = P(riverGX(gy), gy);
     if (p[1] < yMin) continue;
@@ -464,6 +465,7 @@ function drawWater(P) {
   ctx.beginPath(); ctx.ellipse(p0[0] - cw * .12, top + ch * .05, cw * .38, ch * .05, 0, 0, 6.2832); ctx.fill();
   // fall
   const fx = p0[0] + cw * .02, fw = cw * .3;
+  riverMeta = {wdt, p0, ch, cw, top, fx, fw};          // geometry for the animated highlight layer (section 6b)
   const wg = ctx.createLinearGradient(0, top, 0, p0[1]);
   wg.addColorStop(0, '#e9fbff'); wg.addColorStop(.5, '#bfeaf5'); wg.addColorStop(1, '#8fd3e8');
   ctx.fillStyle = wg;
@@ -533,12 +535,81 @@ function nearStream(x, y, d) {
   return false;
 }
 
+/* ======================================================================
+ * 6b. Moving water highlights (v7)
+ * The river itself stays baked into the cached ground layer. This is a SEPARATE, transparent layer: a bounded handful of short
+ * shimmer streaks that travel downstream along the sampled centreline, plus a waterfall trickle and pool ripples. Geometry
+ * (centreline lengths, streak seeds, bridge keep-out box) is computed once per ground build and cached on the layer; a tick is
+ * only a few path strokes: no gradients, no offscreen buffers, no repaint of land, trees or cliff. It runs after the ground blit
+ * and before buildings / scenery sprites, and is clipped around the bridge so the bridge always stays on top and never drifts.
+ * ==================================================================== */
+const RIVER_STEP_MS = FAST ? 66 : 50;          // ~15 fps on phones, 20 fps on desktop
+let lowPower = false;                          // best effort (Battery Status API where it exists): low and not charging -> still water
+function prepRiver() {
+  const pts = streamPts, m = riverMeta;
+  if (!m || pts.length < 4) return null;
+  const cum = [0];
+  for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+  const total = cum[cum.length - 1], r = rng(707), n = FAST ? 10 : 18, streaks = [];
+  for (let i = 0; i < n; i++) streaks.push({u: (i + r() * .7) / n, lat: (r() < .7 ? -(.1 + r() * .28) : .34 + r() * .08) * m.wdt, len: m.wdt * (.9 + r() * .9), g: i & 1});
+  return {pts: pts.slice(), cum, total, m, streaks, box: bridgeBox, speed: clamp(m.wdt * 1.6, 24, 90), fade: m.wdt * 1.5};
+}
+function riverAt(rv, s, lat, out) {              // point on the centreline at arclength s, pushed sideways by lat
+  const cum = rv.cum, pts = rv.pts;
+  let lo = 0, hi = cum.length - 1;
+  while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (cum[mid] <= s) lo = mid; else hi = mid; }
+  const a = pts[lo], b = pts[hi], sl = cum[hi] - cum[lo] || 1, f = clamp((s - cum[lo]) / sl, 0, 1);
+  out[0] = a[0] + (b[0] - a[0]) * f - (b[1] - a[1]) / sl * lat;
+  out[1] = a[1] + (b[1] - a[1]) * f + (b[0] - a[0]) / sl * lat;
+}
+function drawRiver(c, rv, t) {
+  const A = affine(bview, view), m = rv.m, tmp = [0, 0], g0 = new Path2D(), g1 = new Path2D(), rip = new Path2D();
+  c.save();
+  if (!A.id) c.transform(A.k, 0, 0, A.k, A.tx, A.ty);
+  c.lineCap = 'round'; c.lineJoin = 'round';
+  // downstream = increasing arclength (the source / waterfall is pts[0])
+  for (const st of rv.streaks) {
+    const s = (st.u * rv.total + t * rv.speed) % rv.total, len = st.len * Math.min(1, s / rv.fade, (rv.total - s) / rv.fade);
+    if (len < 3) continue;
+    const path = st.g ? g1 : g0;
+    riverAt(rv, s, st.lat, tmp); path.moveTo(tmp[0], tmp[1]);
+    riverAt(rv, s + len * .5, st.lat, tmp); path.lineTo(tmp[0], tmp[1]);
+    riverAt(rv, s + len, st.lat, tmp); path.lineTo(tmp[0], tmp[1]);
+    riverAt(rv, s + len * .15, st.lat + m.wdt * .1, tmp); rip.moveTo(tmp[0], tmp[1]);
+    riverAt(rv, s + len * .6, st.lat + m.wdt * .1, tmp); rip.lineTo(tmp[0], tmp[1]);
+  }
+  c.save();
+  if (rv.box) { const b = rv.box; c.beginPath(); c.rect(-60, -60, W + 120, H + 120); c.rect(b.x0, b.y0, b.x1 - b.x0, b.y1 - b.y0); c.clip('evenodd'); }
+  c.strokeStyle = 'rgba(30,110,150,.2)'; c.lineWidth = Math.max(1, m.wdt * .05); c.stroke(rip);
+  c.strokeStyle = `rgba(255,255,255,${(.6 + .2 * Math.sin(t * 1.7)).toFixed(2)})`; c.lineWidth = Math.max(1.4, m.wdt * .07); c.stroke(g0);
+  c.strokeStyle = `rgba(255,255,255,${(.5 + .2 * Math.sin(t * 1.7 + 2.1)).toFixed(2)})`; c.lineWidth = Math.max(1.1, m.wdt * .05); c.stroke(g1);
+  c.restore();
+  // waterfall trickle (dashes slide down the fall) + two expanding ripple rings in the pool
+  const fall = new Path2D(), top = m.top + m.ch * .1, bot = m.p0[1] - 2, dl = m.ch * .14;
+  for (let j = 0; j < 3; j++) { const o = (j - 1) * m.fw * .28; fall.moveTo(m.fx + o, top); fall.lineTo(m.fx + o * 1.2, bot); }
+  c.strokeStyle = 'rgba(255,255,255,.7)'; c.lineWidth = Math.max(1.3, m.fw * .07);
+  c.setLineDash([dl, dl * 1.2]); c.lineDashOffset = -t * m.ch * .9; c.stroke(fall); c.setLineDash([]);
+  for (let k = 0; k < 2; k++) {
+    const ph = (t * .45 + k * .5) % 1, rx = m.cw * (.08 + .4 * ph);
+    c.strokeStyle = `rgba(255,255,255,${(.5 * (1 - ph)).toFixed(2)})`; c.lineWidth = Math.max(1, m.cw * .02);
+    c.beginPath(); c.ellipse(m.p0[0] + m.cw * .02, m.p0[1] + m.cw * .03, rx, rx * .28, 0, 0, 6.2832); c.stroke();
+  }
+  c.restore();
+}
+const riverOn = () => !reduced && !lowPower && !document.hidden && !trans && !!(stat && stat.river);
+if (navigator.getBattery) navigator.getBattery().then(b => {      // local API, no network; absent on Safari / Firefox
+  const upd = () => { const lp = !b.charging && b.level <= .15; if (lp !== lowPower) { lowPower = lp; markDirty(); } };
+  b.addEventListener('levelchange', upd); b.addEventListener('chargingchange', upd); upd();
+}).catch(() => {});
+
 /* Footbridge over the river: stone abutments, a plank deck one cell wide, posts and two-rail handrails, lanterns at the
  * ends and a soft shadow on the water. Painted into the cached ground layer, after the water and before buildings. */
 function drawBridge(P) {
-  bridgePts = [];
+  bridgePts = []; bridgeBox = null;
   if (S.n < FAR_FROM) return;
-  const tw = view.tw, uz = tw * .55, {x0, x1, y} = BRIDGE, a = y + .14, b = y + .86, dz = uz * .1, rh = uz * .42;
+  const tw = view.tw, uz = tw * .55, {x0, x1, y} = BRIDGE, a = y + .14, b = y + .86, dz = uz * .1, rh = uz * .42, hh = dz + rh + uz * .2;
+  const bb = bboxOf([P(x0 - .1, y, 0), P(x1 + .1, y, 0), P(x1 + .1, y + 1, 0), P(x0 - .1, y + 1, 0), P(x0 - .1, y, hh), P(x1 + .1, y, hh), P(x1 + .1, y + 1, hh), P(x0 - .1, y + 1, hh)]);
+  bridgeBox = {x0: bb.x0 - 2, y0: bb.y0 - 2, x1: bb.x1 + 2, y1: bb.y1 + 2};       // deck + rails + lanterns: water highlights are clipped out of it
   for (let x = x0; x <= x1 + .01; x += .25) bridgePts.push(P(x, y + .5));
   poly(ctx, [P(x0 + .15, a + .2), P(x1 - .05, a + .2), P(x1 - .05, b + .2), P(x0 + .15, b + .2)], 'rgba(20,60,80,.22)');                     // shadow on the water
   const rail = yy => {                                                                                                                       // posts + two rails along one edge
@@ -1149,7 +1220,7 @@ function spawnSparks(x, y, n, cols) {
  * type) and the painter's order is cached per building set. The camera only moves the finished image around.
  * Expansion cross-fades two finished scene images (before / after) instead of redrawing a forest every animation frame. */
 let stat = null, statId = 0, tcv = null, trans = null, ordered = [], ordSig = '', LP = null;
-const perf = {on: /[?&]perf=1(&|$)/.test(location.search), builds: 0, orders: 0, buildMs: 0, fps: 0, ms: 0, worst: 0, wmax: 0, frames: 0, t0: 0, el: null};
+const perf = {on: /[?&]perf=1(&|$)/.test(location.search), builds: 0, orders: 0, riverMs: 0, riverWorst: 0, riverDraws: 0, buildMs: 0, fps: 0, ms: 0, worst: 0, wmax: 0, frames: 0, t0: 0, el: null};
 const VIEW_KEYS = ['tw', 'cx', 'cy', 'c', 'lo', 'hi'];
 const viewSettled = () => VIEW_KEYS.every(k => view[k] === tgt[k]);
 function staticSig() {      // terrain only: nothing about buildings, selection, modes, sheets or the live camera
@@ -1215,6 +1286,7 @@ function renderGround(P) {
   drawWater(P);
   drawBridge(P);
   drawPath(P);
+  stat.river = prepRiver();            // cached per ground build; the animated layer reads only this
 }
 /* Repaints the ground layer for the BASE camera (the live camera is swapped out for the duration). */
 function buildStatic(sig) {
@@ -1320,6 +1392,11 @@ function draw() {
   else {
     ensureStatic(); ensureOrder();
     drawGround(ctx);
+    if (stat.river) {                    // moving highlights; reduced motion / low power get one calm still frame (t = 0)
+      const r0 = perf.on ? performance.now() : 0;
+      drawRiver(ctx, stat.river, riverOn() ? now / 1000 : 0);
+      if (perf.on) { const d = performance.now() - r0; perf.riverMs += (d - perf.riverMs) * .15; perf.riverWorst = Math.max(perf.riverWorst, d); perf.riverDraws++; }
+    }
     drawOverlays(LP);
     ordered.forEach(e => e.f());
     drawGhostAndSelection(LP, view.tw * .55);
@@ -1468,9 +1545,11 @@ function frame(ts) {
   const now = performance.now();
   const dt = Math.min(.05, (ts - last) / 1000 || .016);
   const want = (ui.mode === 'build' || ui.mode === 'move') ? 1 : 0;
-  if (!dirty && !isBusy(want) && now - lastDrawAt < (isPulsing() ? 50 : AMBIENT_STEP_MS)) { rafId = requestAnimationFrame(frame); return; }
+  const flow = riverOn(), ambientNow = !reduced && !FAST && now - lastActive < AMBIENT_IDLE_MS;
+  if (!dirty && !isBusy(want) && now - lastDrawAt < (isPulsing() ? 50 : flow ? RIVER_STEP_MS : AMBIENT_STEP_MS)) { rafId = requestAnimationFrame(frame); return; }
+  const needT = dirty || isBusy(want) || isPulsing() || ambientNow;     // a river-only tick must not keep clouds / leaves moving after the idle timeout
   last = ts;
-  if (!reduced) T += dt;
+  if (!reduced && needT) T += dt;
   const k = reduced ? 1 : 1 - Math.exp(-dt * 8);
   VIEW_KEYS.forEach(key => { view[key] += (tgt[key] - view[key]) * k; if (Math.abs(tgt[key] - view[key]) < .001) view[key] = tgt[key]; });
   gridA += (want - gridA) * (reduced ? 1 : 1 - Math.exp(-dt * 10));
@@ -1479,7 +1558,7 @@ function frame(ts) {
   updateChips();
   if (perf.on) updatePerf(now, performance.now() - now);
   const ambient = !reduced && !FAST && now - lastActive < AMBIENT_IDLE_MS;
-  if (dirty || isBusy(want) || isPulsing() || ambient) rafId = requestAnimationFrame(frame);
+  if (dirty || isBusy(want) || isPulsing() || ambient || riverOn()) rafId = requestAnimationFrame(frame);
 }
 /* ?perf=1 overlay: real measured numbers only. "frame" is the CPU time of the whole frame callback (draw + chips), "worst" the
  * slowest frame of the last second. fps counts frames actually rendered, so it is low or 0 when the page is idle. */
@@ -1489,9 +1568,9 @@ function updatePerf(now, ms) {
   if (now - perf.t0 >= 500) {
     perf.fps = perf.frames * 1000 / (now - perf.t0); perf.frames = 0; perf.t0 = now;
     if (!perf.el) { perf.el = document.createElement('div'); perf.el.className = 'perf'; perf.el.setAttribute('aria-hidden', 'true'); $('app').appendChild(perf.el); }
-    perf.el.textContent = `${FAST ? 'fast' : 'rich'} fps ${perf.fps.toFixed(0)} | frame ${ms.toFixed(1)}ms avg ${perf.ms.toFixed(1)} worst ${perf.worst.toFixed(1)} | ground rebuilds ${perf.builds} (${perf.buildMs.toFixed(0)}ms) order ${perf.orders} | ` +
+    perf.el.textContent = `${FAST ? 'fast' : 'rich'} fps ${perf.fps.toFixed(0)} | frame ${ms.toFixed(1)}ms avg ${perf.ms.toFixed(1)} worst ${perf.worst.toFixed(1)} | ground rebuilds ${perf.builds} (${perf.buildMs.toFixed(0)}ms) order ${perf.orders} | river ${perf.riverMs.toFixed(2)}ms avg ${perf.riverWorst.toFixed(1)} worst (${perf.riverDraws} draws) | ` +
       `canvas ${canvas.width}x${canvas.height} @${dpr.toFixed(2)} | sprites ${sprites.size}+${bsprites.size} ${((spriteBytes + 4 * W * H * dpr * dpr * (2 + (tcv ? 2 : 0))) / 1048576).toFixed(1)}MB`;
-    perf.worst = 0;
+    perf.worst = 0; perf.riverWorst = 0;
   }
 }
 
