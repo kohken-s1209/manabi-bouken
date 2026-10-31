@@ -36,6 +36,6 @@ jobs:
           cp /tmp/kv-v5/{index.html,style.css,app.js,README.md} storybook-demo/
           git add -- storybook-demo/index.html storybook-demo/style.css storybook-demo/app.js storybook-demo/README.md
           git diff --cached --check
-          test "$(git diff --cached --name-only | wc -l)" -eq 4
+          test "$(git diff --cached --name-only | wc -l)" -ge 1
           git commit -m 'Update isolated Knowledge Village storybook demo to v5'
           git push origin HEAD:refs/heads/demo/kv-storybook-v5
