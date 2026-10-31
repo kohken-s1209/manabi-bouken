@@ -68,7 +68,9 @@ function circle(ctx, x, y, r, fill) { ctx.beginPath(); ctx.arc(x, y, r, 0, 6.283
 const canvas = $('scene');
 const ctx = canvas.getContext('2d');
 const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-let W = 0, H = 0, dpr = 1, bg = null, T = 0;
+let W = 0, H = 0, dpr = 1, bg = null, bgPrev = null, bgFade = 0, T = 0;
+const stageOf = n => n - N_MIN;      // 0..4 : 16 / 25 / 36 / 49 / 64 tiles
+const sprites = new Map();            // cached tree / bush bitmaps (static art, drawn many times per frame)
 const view = {tw: 60, cx: 0, cy: 0, c: 4, lo: 2, hi: 6};
 const tgt = {tw: 60, cx: 0, cy: 0, c: 4, lo: 2, hi: 6};
 let gridA = 0, area = {top: 120, bottom: 600};
@@ -99,20 +101,24 @@ function layout() {
   const sheet = $('sheet');
   const sheetH = sheet.classList.contains('open') ? sheet.offsetHeight : 0;
   root.setProperty('--above', (barH + sheetH) + 'px');
+  // the toast always sits above the placement bar, so the two never stack on top of each other
+  const ab = $('actionbar'), abH = ab.hidden ? 0 : ab.offsetHeight + 8;
+  root.setProperty('--toast-b', (barH + sheetH + abH + 14) + 'px');
   const hud = document.querySelector('.hud');
   const hudB = hud.getBoundingClientRect().bottom;
   root.setProperty('--hud-h', hudB + 'px');
   // reserve hint/action-bar space up front so the map never shifts under a tapping finger
   const placing = ui.mode === 'build' || ui.mode === 'move';
   area.top = hudB + 44;
-  area.bottom = window.innerHeight - barH - sheetH - (placing ? 60 : 0) - 6;
+  area.bottom = window.innerHeight - barH - sheetH - (placing ? 78 : 0) - 6;
   computeTarget();
 }
 function resize() {
   dpr = Math.min(2, window.devicePixelRatio || 1);
   W = window.innerWidth; H = window.innerHeight;
   canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
-  bg = buildBackdrop(W, H, dpr);
+  sprites.clear();
+  bg = buildBackdrop(W, H, dpr, stageOf(S.n)); bgPrev = null; bgFade = 0;
   layout(); snapView(); dirty = true;
 }
 
@@ -225,10 +231,30 @@ function drawCloud(c, x, y, s) {
   c.beginPath(); c.ellipse(x + .55 * s, y + .22 * s, .75 * s, .12 * s, 0, 0, 6.2832); c.fill();
 }
 
+/* Trees and bushes are static, so they are rendered once into small bitmaps (size bucketed so the zoom animation
+ * does not create a new bitmap every frame) and blitted. This keeps a dense forest affordable on phones. */
+function drawSprite(c, type, kind, seed, x, y, s, alpha) {
+  const q = Math.max(12, Math.round(s / 6) * 6), key = type + kind + '|' + seed + '|' + q + '|' + dpr;
+  let e = sprites.get(key);
+  if (!e) {
+    if (sprites.size > 320) sprites.clear();
+    const w = Math.ceil(type === 'tree' ? q * 1.15 : q * 1.8), h = Math.ceil(type === 'tree' ? q * 1.25 : q * .95);
+    const cv = document.createElement('canvas'); cv.width = Math.ceil(w * dpr); cv.height = Math.ceil(h * dpr);
+    const g = cv.getContext('2d'); g.scale(dpr, dpr);
+    const ax = w / 2, ay = h - q * .1;
+    if (type === 'tree') drawTree(g, ax, ay, q, kind, seed); else drawBush(g, ax, ay, q, kind, seed);
+    e = {cv, w, h, ax, ay, q}; sprites.set(key, e);
+  }
+  const k = s / e.q;
+  if (alpha != null && alpha < 1) { const pa = c.globalAlpha; c.globalAlpha = pa * Math.max(0, alpha); c.drawImage(e.cv, x - e.ax * k, y - e.ay * k, e.w * k, e.h * k); c.globalAlpha = pa; }
+  else c.drawImage(e.cv, x - e.ax * k, y - e.ay * k, e.w * k, e.h * k);
+}
+
 /* ======================================================================
  * 5. Backdrop (cached): sky, hills, meadow, layered forest
  * ==================================================================== */
-function buildBackdrop(w, h, ratio) {
+function buildBackdrop(w, h, ratio, stage) {
+  const st = stage || 0;              // 0..4: the painted forest thins out and withdraws as the village grows
   const mk = () => { const c = document.createElement('canvas'); c.width = Math.round(w * ratio); c.height = Math.round(h * ratio); const x = c.getContext('2d'); x.scale(ratio, ratio); return [c, x]; };
   const [skyC, sk] = mk(), [farC, fr] = mk();
   const hy = h * 0.36;
@@ -293,9 +319,10 @@ function buildBackdrop(w, h, ratio) {
   }
 
   // layered forest rows, back to front
-  const rows = 4;
+  // the rows nearest the village are dropped first (4 -> 3 -> 3 -> 2 -> 2) and the rest climb toward the horizon
+  const rows = 4 - Math.floor((st + 1) / 2);
   for (let k = 0; k < rows; k++) {
-    const rr = rng(100 + k), base = hy + h * (.012 + k * .042), sz = Math.min(w * .5, h * (.15 + k * .03));
+    const rr = rng(100 + k), base = hy + h * (.012 + k * .042) - st * h * .007, sz = Math.min(w * .5, h * (.15 + k * .03)) * (1 - st * .035);
     const step = sz * (.46 + k * .02);
     for (let x = -sz * .5; x < w + sz; x += step) {
       const kind = pickKind(rr());
@@ -310,8 +337,11 @@ function buildBackdrop(w, h, ratio) {
   const side = rng(777), ss = Math.min(h * .24, w * .24);
   for (let i = 0; i < 6; i++) {
     const sz = ss * (.78 + side() * .3), y = h * (.5 + i * .075);
-    drawTree(fr, -sz * .1 + side() * sz * .2, y, sz, pickKind(side()), 900 + i);
-    drawTree(fr, w + sz * .1 - side() * sz * .2, y + h * .03, sz, pickKind(side()), 950 + i);
+    const xl = -sz * .1 + side() * sz * .2 - st * sz * .14, kl = pickKind(side());
+    const xr = w + sz * .1 - side() * sz * .2 + st * sz * .14, kr = pickKind(side());
+    if (i >= 6 - st) continue;        // random draws above stay in sequence, so the surviving trees never change
+    drawTree(fr, xl, y, sz, kl, 900 + i);
+    drawTree(fr, xr, y + h * .03, sz, kr, 950 + i);
   }
   return {sky: skyC, far: farC};
 }
@@ -465,10 +495,26 @@ const tufts = [];
   }
 })();
 
+/* A dirt road leaves the front-right edge of the plot toward the viewer; it gets wider as the village grows.
+ * It stops at the plot edge (drawn before the lawn), so it never covers editable land. */
+function drawPath(P) {
+  const {lo, hi, tw} = view, grow = clamp(hi - lo - N_MIN, 0, 4), mid = (lo + hi) / 2;
+  const a = P(hi + .05, mid + .4), e = [W + tw * 1.2, Math.min(H * .86, a[1] + tw * (2.6 + grow * .3))];
+  const c1 = [lerp(a[0], e[0], .35), a[1] + tw * (.35 + grow * .08)];
+  const path = new Path2D(); path.moveTo(a[0], a[1]); path.quadraticCurveTo(c1[0], c1[1], e[0], e[1]);
+  const wd = tw * (.36 + grow * .05);
+  ctx.save(); ctx.lineCap = 'butt';
+  ctx.strokeStyle = 'rgba(110,150,60,.55)'; ctx.lineWidth = wd + 10; ctx.stroke(path);
+  ctx.strokeStyle = '#b99560'; ctx.lineWidth = wd + 3; ctx.stroke(path);
+  ctx.strokeStyle = '#e6cc98'; ctx.lineWidth = wd; ctx.stroke(path);
+  ctx.strokeStyle = 'rgba(255,240,200,.55)'; ctx.lineWidth = wd * .35; ctx.setLineDash([tw * .12, tw * .28]); ctx.stroke(path);
+  ctx.restore();
+}
 function drawLand(P) {
   const {lo, hi, tw} = view, dz = tw * .2;
   const A = P(lo, lo), B = P(hi, lo), C = P(hi, hi), D = P(lo, hi);
-  const ex = .45;
+  const grow = clamp(hi - lo - N_MIN, 0, 4), ex = .45 + grow * .14;      // the grassy clearing around the plot widens with every expansion
+  poly(ctx, [P(lo - ex * 1.9, lo - ex * 1.9), P(hi + ex * 1.9, lo - ex * 1.9), P(hi + ex * 1.9, hi + ex * 1.9), P(lo - ex * 1.9, hi + ex * 1.9)], 'rgba(205,234,140,.22)');
   poly(ctx, [P(lo - ex, lo - ex), P(hi + ex, lo - ex), P(hi + ex, hi + ex), P(lo - ex, hi + ex)], 'rgba(200,232,130,.5)');
   poly(ctx, [P(lo - ex * .5, lo - ex * .5), P(hi + ex * .5, lo - ex * .5), P(hi + ex * .5, hi + ex * .5), P(lo - ex * .5, hi + ex * .5)], 'rgba(190,226,120,.7)');
   // soft drop shadow under the plot
@@ -845,9 +891,22 @@ function polysOverlap(a, b, tol) {      // separating-axis test for convex polyg
   }
   return true;
 }
+const bboxOf = pg => pg.reduce((r, p) => ({x0: Math.min(r.x0, p[0]), y0: Math.min(r.y0, p[1]), x1: Math.max(r.x1, p[0]), y1: Math.max(r.y1, p[1])}), {x0: 1e9, y0: 1e9, x1: -1e9, y1: -1e9});
+const boxesTouch = (a, b, tol) => !(a.x1 <= b.x0 + tol || b.x1 <= a.x0 + tol || a.y1 <= b.y0 + tol || b.y1 <= a.y0 + tol);
+const footprintPoly = (type, x, y) => { const it = ITEMS[type]; return [REF_P(x, y), REF_P(x + it.w, y), REF_P(x + it.w, y + it.h), REF_P(x, y + it.h)]; };
+/* Three layers, cheapest first, all in a scale-free projection so the answer never depends on zoom:
+ *  1. projected tile footprints (diamonds) may not intersect,
+ *  2. painted bounding boxes (walls + roof + chimney/flags/props) must intersect before the exact test runs,
+ *  3. the exact painted silhouettes (convex hulls) may not overlap (SAT).
+ * Anything that fails 1 or 3 is refused, so two buildings can never draw over each other, whichever is in front. */
 function visualConflict(type, x, y, ignoreId) {
-  const mine = silhouette(type, x, y, REF_P, 1);
-  return S.blds.find(b => b.id !== ignoreId && polysOverlap(mine, silhouette(b.type, b.x, b.y, REF_P, 1), .004)) || null;
+  const mine = silhouette(type, x, y, REF_P, 1), mb = bboxOf(mine), mf = footprintPoly(type, x, y);
+  return S.blds.find(b => {
+    if (b.id === ignoreId) return false;
+    if (polysOverlap(mf, footprintPoly(b.type, b.x, b.y), .004)) return true;
+    const theirs = silhouette(b.type, b.x, b.y, REF_P, 1);
+    return boxesTouch(mb, bboxOf(theirs), .004) && polysOverlap(mine, theirs, .004);
+  }) || null;
 }
 function hull(pts) {
   pts = pts.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]);
@@ -867,17 +926,74 @@ function hitBuilding(px, py) {
 /* ======================================================================
  * 9. Scenery objects on unexplored tiles
  * ==================================================================== */
+/* The forest is a fixed set of world-space objects covering WR0..WR1 (well past the 8x8 maximum plot). What is
+ * *visible* depends on the land size: every object has a clearing distance (in tiles from the plot edge), and
+ * that distance grows with each expansion, so trees, bushes and rocks disappear ring by ring and the forest
+ * edge withdraws outward: 16 -> 25 -> 36 -> 49 -> 64 tiles. */
+const WR0 = -6, WR1 = WORLD + 6;
 const wild = [];
 (function () {
-  for (let x = 0; x < WORLD; x++) for (let y = 0; y < WORLD; y++) for (let k = 0; k < 2; k++) {
-    const r = rng(x * 73 + y * 19 + 5 + k * 911);
-    if (r() > (k ? .62 : .9)) continue;
-    const v = r(), o = {tx: x, ty: y, x: x + .15 + r() * .7, y: y + .15 + r() * .7, seed: Math.floor(r() * 1000), kind: pickKind(r())};
-    o.type = v < .34 ? 'tree' : v < .58 ? 'bush' : v < .7 ? 'rock' : 'flower';
-    o.size = .8 + r() * .4;
+  for (let x = WR0; x < WR1; x++) for (let y = WR0; y < WR1; y++) for (let k = 0; k < 3; k++) {
+    const r = rng((x + 20) * 73 + (y + 20) * 19 + 5 + k * 911);
+    if (r() > [.95, .75, .5][k]) continue;
+    const o = {tx: x, ty: y, x: x + .12 + r() * .76, y: y + .12 + r() * .76, seed: Math.floor(r() * 1000), kind: pickKind(r())};
+    const v = r();
+    o.type = v < .46 ? 'tree' : v < .72 ? 'bush' : v < .84 ? 'rock' : 'flower';
+    o.size = .8 + r() * .45;
+    o.jit = r();
     wild.push(o);
   }
 })();
+const CLEAR_BASE = {tree: .9, bush: .35, rock: .3, flower: .04}, CLEAR_STEP = {tree: .42, bush: .3, rock: .26, flower: 0};
+function wildDist(o, n) {             // ring distance (tiles) from the object to the plot of size n
+  const lo = loOf(n), hi = lo + n;
+  return Math.max(lo - o.x, o.x - hi, lo - o.y, o.y - hi, 0);
+}
+function wildVisible(o, n) {
+  const st = stageOf(n);
+  return wildDist(o, n) >= CLEAR_BASE[o.type] + CLEAR_STEP[o.type] * st + o.jit * .35;
+}
+/* Tall trees never stand in front of the plot (they would hide the build area); the front keeps low plants.
+ * Decided in world space (against the target view) so objects do not pop while the camera is zooming. */
+function wildType(o) { return o.type === 'tree' && o.x + o.y > 2 * tgt.c + 1.4 ? (o.seed % 2 ? 'bush' : 'flower') : o.type; }
+function wildSize(type, o, tw) { return type === 'tree' ? tw * 1.05 * o.size : type === 'bush' ? tw * .7 * o.size : type === 'rock' ? tw * .55 * o.size : tw * .8; }
+function wildBox(type, p, s) {
+  return type === 'tree' ? rectPts(p[0], p[1], s * .46, s * .98, s * .04) : type === 'bush' ? rectPts(p[0], p[1], s * .5, s * .72, s * .02)
+    : type === 'rock' ? rectPts(p[0], p[1], s * .38, s * .4, s * .02) : rectPts(p[0], p[1], s * .45, s * .28, s * .05);
+}
+/* Everything that decides whether a scenery object is actually painted for land size n in the given view. */
+function wildInfo(o, P, tw, lp, n) {
+  if (!wildVisible(o, n)) return null;
+  const p = P(o.x, o.y);
+  if (p[0] < -tw * 2 || p[0] > W + tw * 2 || p[1] < -tw * 2.5 || p[1] > H + tw * 3) return null;
+  if (nearStream(p[0], p[1], tw * .85)) return null;
+  const type = wildType(o), s = wildSize(type, o, tw);
+  if (polysOverlap(wildBox(type, p, s), lp, 0)) return null;      // its painted box may never touch the plot outline
+  return {type, p, s};
+}
+function drawWildObj(c, type, o, x, y, s, alpha) {
+  if (type === 'tree' || type === 'bush') drawSprite(c, type, o.kind, o.seed, x, y, s, alpha);
+  else { const pa = c.globalAlpha; c.globalAlpha = pa * (alpha == null ? 1 : alpha); if (type === 'rock') drawRock(c, x, y, s); else drawFlowerPatch(c, x, y, s, o.seed); c.globalAlpha = pa; }
+}
+/* Painter's order by footprint rectangles: A is behind B when A lies wholly to the left of B or wholly behind it.
+ * A plain "x+y" sort is wrong for big buildings next to small ones; this one is a topological sort with the
+ * x+y key only as the tie-break for pairs that have no strict relation. */
+function depthSort(list) {
+  const n = list.length, adj = list.map(() => []), indeg = new Array(n).fill(0), done = new Array(n).fill(false), out = [];
+  const behind = (a, b) => a.x1 <= b.x0 + 1e-6 || a.y1 <= b.y0 + 1e-6;
+  for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
+    const a = list[i], b = list[j], ab = behind(a, b), ba = behind(b, a);
+    const r = ab && !ba ? -1 : ba && !ab ? 1 : Math.sign(a.k - b.k);
+    if (r < 0) { adj[i].push(j); indeg[j]++; } else if (r > 0) { adj[j].push(i); indeg[i]++; }
+  }
+  for (let c = 0; c < n; c++) {
+    let pick = -1;
+    for (let i = 0; i < n; i++) if (!done[i] && indeg[i] <= 0 && (pick < 0 || list[i].k < list[pick].k)) pick = i;
+    if (pick < 0) for (let i = 0; i < n; i++) if (!done[i] && (pick < 0 || list[i].k < list[pick].k)) pick = i;      // cycle: fall back to x+y
+    done[pick] = true; out.push(list[pick]); adj[pick].forEach(j => indeg[j]--);
+  }
+  return out;
+}
 /* Convex outline of the plot on screen (lawn + earth bank), grown by ex tiles. Scenery whose painted
  * bounding box touches it is not drawn, so trees and bushes can never hide editable land. */
 function landPoly(P, tw, ex) {
@@ -904,41 +1020,52 @@ function draw() {
   ctx.clearRect(0, 0, W, H);
   ctx.drawImage(bg.sky, 0, 0, W, H);
   clouds.forEach(cl => { const x = ((cl.x * W + T * cl.v) % (W + cl.s * 3)) - cl.s * 1.5; drawCloud(ctx, x, cl.y * H, cl.s * (W < 500 ? .7 : 1)); });
-  ctx.drawImage(bg.far, 0, 0, W, H);
+  if (bgPrev && bgFade > 0) {          // forest withdrawing: cross-fade from the previous stage's painted forest
+    ctx.drawImage(bgPrev.far, 0, 0, W, H);
+    ctx.globalAlpha = 1 - bgFade; ctx.drawImage(bg.far, 0, 0, W, H); ctx.globalAlpha = 1;
+  } else ctx.drawImage(bg.far, 0, 0, W, H);
   const P = curP(), tw = view.tw, uz = tw * .55;
 
   drawWater(P);
+  drawPath(P);
   drawLand(P);
+  drawExpandGlow(P);
   drawFences(P);
   drawOverlays(P);
 
-  // depth-sorted entities
+  // depth-sorted entities (forest objects are points, buildings are footprint rectangles)
   const ents = [];
-  const lo = view.lo, hi = view.hi;
-  const lp = landPoly(P, tw, .12);
+  const lp = landPoly(P, tw, .25), nowMs = performance.now();
+  const clearing = ui.mode === 'expand' && S.n < N_MAX;
   wild.forEach(o => {
-    if (o.tx + .5 > lo && o.tx + .5 < hi && o.ty + .5 > lo && o.ty + .5 < hi) return;
-    const p = P(o.x, o.y);
-    if (p[0] < -tw * 2 || p[0] > W + tw * 2 || p[1] < -tw * 2 || p[1] > H + tw * 3) return;
-    if (nearStream(p[0], p[1], tw * .85)) return;
-    // trees only stand behind / beside the plot; the front stays low (bushes, rocks, flowers)
-    const type = o.type === 'tree' && p[1] > view.cy + tw * .35 ? (o.seed % 2 ? 'bush' : 'flower') : o.type;
-    const s = type === 'tree' ? tw * 1.05 * o.size : type === 'bush' ? tw * .7 * o.size : type === 'rock' ? tw * .55 * o.size : tw * .8;
-    const box = type === 'tree' ? rectPts(p[0], p[1], s * .46, s * .98, s * .04) : type === 'bush' ? rectPts(p[0], p[1], s * .5, s * .72, s * .02)
-      : type === 'rock' ? rectPts(p[0], p[1], s * .38, s * .4, s * .02) : rectPts(p[0], p[1], s * .45, s * .28, s * .05);
-    if (polysOverlap(box, lp, 0)) return;
-    ents.push({k: o.x + o.y, f: () => {
-      if (type === 'tree') drawTree(ctx, p[0], p[1], s, o.kind, o.seed);
-      else if (type === 'bush') drawBush(ctx, p[0], p[1], s, o.kind, o.seed);
-      else if (type === 'rock') drawRock(ctx, p[0], p[1], s);
-      else drawFlowerPatch(ctx, p[0], p[1], s, o.seed);
+    const info = wildInfo(o, P, tw, lp, S.n);
+    if (!info) return;
+    const {type, p, s} = info, mark = clearing && !wildVisible(o, S.n + 1);
+    ents.push({k: o.x + o.y, x0: o.x, x1: o.x, y0: o.y, y1: o.y, f: () => {
+      if (mark) {                      // trees that the next expansion will clear glow gold
+        const pu = .5 + .5 * Math.sin(T * 4);
+        ctx.fillStyle = `rgba(255,215,90,${.28 + pu * .25})`; ctx.strokeStyle = 'rgba(255,240,170,.9)'; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.ellipse(p[0], p[1], s * .42, s * .13, 0, 0, 6.2832); ctx.fill(); ctx.stroke();
+      }
+      drawWildObj(ctx, type, o, p[0], p[1], s, 1);
+    }});
+  });
+  fxGhosts.forEach(g => {              // trees being cleared: shrink and fade where they stood
+    const k = clamp((nowMs - g.t0) / (reduced ? 1 : 900), 0, 1);
+    if (k >= 1) return;
+    const p = P(g.o.x, g.o.y), s = wildSize(g.type, g.o, tw);
+    ents.push({k: g.o.x + g.o.y, x0: g.o.x, x1: g.o.x, y0: g.o.y, y1: g.o.y, f: () => {
+      drawWildObj(ctx, g.type, g.o, p[0], p[1] + k * s * .06, s * (1 - k * .55), (1 - k) * (1 - k));
+      circle(ctx, p[0] - s * .2 * k, p[1] - s * .2 - k * s * .3, s * (.14 + k * .2), `rgba(255,252,225,${.5 * (1 - k)})`);
+      circle(ctx, p[0] + s * .22 * k, p[1] - s * .12 - k * s * .2, s * (.1 + k * .18), `rgba(235,248,190,${.45 * (1 - k)})`);
     }});
   });
   S.blds.forEach(b => {
     const it = ITEMS[b.type], moving = ui.mode === 'move' && ui.moveId === b.id;
-    ents.push({k: b.x + it.w + b.y + it.h - .01 + b.x * 1e-4, f: () => drawBuilding(ctx, P, tw, b.type, b.x, b.y, moving ? .5 : 1, T)});
+    ents.push({k: b.x + it.w + b.y + it.h - .01 + b.x * 1e-4, x0: b.x, x1: b.x + it.w, y0: b.y, y1: b.y + it.h,
+      f: () => drawBuilding(ctx, P, tw, b.type, b.x, b.y, moving ? .5 : 1, T)});
   });
-  ents.sort((a, b) => a.k - b.k).forEach(e => e.f());
+  depthSort(ents).forEach(e => e.f());
 
   drawGhostAndSelection(P, uz);
   drawForeground(P);
@@ -959,6 +1086,31 @@ function draw() {
   const vg = ctx.createRadialGradient(W / 2, H * .5, Math.min(W, H) * .35, W / 2, H * .5, Math.max(W, H) * .75);
   vg.addColorStop(0, 'rgba(50,70,20,0)'); vg.addColorStop(1, 'rgba(50,60,20,.28)');
   ctx.fillStyle = vg; ctx.fillRect(0, 0, W, H);
+}
+
+/* "It opened up!": freshly cleared tiles flash warm and fade outward from the village centre, with twinkles
+ * and a soft light bloom. Short, cheap, and shortened to a quick fade under prefers-reduced-motion. */
+let fx = null;
+const fxGhosts = [];
+function drawExpandGlow(P) {
+  if (!fx) return;
+  const el = (performance.now() - fx.t0) / 1000, dur = reduced ? .6 : 1.2;
+  if (el > fx.span + dur) { fx = null; return; }
+  fx.tiles.forEach(t => {
+    const k = clamp((el - (reduced ? 0 : t.delay)) / dur, 0, 1), a = 1 - k;
+    if (a <= 0) return;
+    poly(ctx, [P(t.x, t.y), P(t.x + 1, t.y), P(t.x + 1, t.y + 1), P(t.x, t.y + 1)], `rgba(255,246,160,${.62 * a * a})`);
+    if (!reduced && k > 0 && k < .95) {
+      const c = P(t.x + t.sx, t.y + t.sy), r = view.tw * (.05 + .06 * Math.sin(k * 3.1416));
+      ctx.fillStyle = `rgba(255,255,235,${.9 * a})`; star(ctx, c[0], c[1] - view.tw * .05, r * 1.6);
+    }
+  });
+  const bl = Math.max(0, 1 - el / (dur + .6));
+  if (bl > 0) {
+    const c = P(view.c, view.c), g = ctx.createRadialGradient(c[0], c[1], 0, c[0], c[1], view.tw * view.hi * .9);
+    g.addColorStop(0, `rgba(255,250,200,${.28 * bl})`); g.addColorStop(1, 'rgba(255,250,200,0)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  }
 }
 
 function drawOverlays(P) {
@@ -1038,16 +1190,22 @@ function label(text, x, y) {
 }
 /* Foreground dressing lives only in the two bottom corners, outside the plot outline and low to the ground,
  * so the centre and front of the editable land (and every tap target) stays completely clear. */
-const fg = (() => { const r = rng(2024), a = []; for (let i = 0; i < 16; i++) a.push({fx: r(), dy: r(), t: r() < .4 ? 'bush' : 'flower', seed: i * 13, k: r() < .5 ? 1 : 4}); return a; })();
+const fg = (() => { const r = rng(2024), a = []; for (let i = 0; i < 14; i++) a.push({fx: r(), dy: r(), t: r() < .35 ? 'bush' : 'flower', seed: i * 13, k: r() < .5 ? 1 : 4}); return a; })();
+const FG_STRIP = .15;                    // foreground may only live in the outer 15% of each side
 function drawForeground(P) {
-  const tw = view.tw, lp = landPoly(P, tw, .3), top = view.cy + tw * .6, span = area.bottom - 12 - top;
+  const tw = view.tw, grow = clamp(view.hi - view.lo - N_MIN, 0, 4), lp = landPoly(P, tw, .5);
+  const top = view.cy + tw * .6, span = area.bottom - 12 - top;
   if (span < 10) return;
-  fg.forEach(f => {
+  const keep = Math.round(14 - grow * 2.5);     // fewer foreground plants as the land opens up
+  fg.forEach((f, i) => {
+    if (i >= keep) return;
     const left = f.fx < .5, u = (left ? f.fx : f.fx - .5) * 2;
-    const x = left ? u * W * .17 : W - u * W * .17, y = top + f.dy * span;
-    const s = f.t === 'bush' ? tw * .5 : tw * .7;
-    if (nearStream(x, y, tw * .8) || polysOverlap(rectPts(x, y, s * .5, s * .75, s * .03), lp, 0)) return;
-    if (f.t === 'bush') drawBush(ctx, x, y, s, f.k, f.seed); else drawFlowerPatch(ctx, x, y, s, f.seed);
+    const x = left ? u * W * FG_STRIP : W - u * W * FG_STRIP, y = top + f.dy * span;
+    const s = f.t === 'bush' ? Math.min(tw * .5, 34) : Math.min(tw * .7, 44);
+    // the centre interaction zone (everything between the two side strips) and the plot outline stay free
+    if (x > W * FG_STRIP && x < W * (1 - FG_STRIP)) return;
+    if (nearStream(x, y, tw * .8) || polysOverlap(rectPts(x, y, s * .9, s * .8, s * .05), lp, 0)) return;
+    if (f.t === 'bush') drawSprite(ctx, 'bush', f.k, f.seed, x, y, s, .92); else drawFlowerPatch(ctx, x, y, s, f.seed);
   });
 }
 
@@ -1058,7 +1216,9 @@ function frame(ts) {
   ['tw', 'cx', 'cy', 'c', 'lo', 'hi'].forEach(key => { view[key] += (tgt[key] - view[key]) * k; if (Math.abs(tgt[key] - view[key]) < .001) view[key] = tgt[key]; });
   const want = (ui.mode === 'build' || ui.mode === 'move') ? 1 : 0;
   gridA += (want - gridA) * (reduced ? 1 : 1 - Math.exp(-dt * 10));
-  if (!reduced || dirty || sparks.length || ui.hold) { draw(); dirty = false; }
+  if (bgFade > 0) { bgFade = reduced ? 0 : Math.max(0, bgFade - dt / 1.4); if (bgFade === 0) bgPrev = null; dirty = true; }
+  for (let i = fxGhosts.length - 1; i >= 0; i--) if (performance.now() - fxGhosts[i].t0 > (reduced ? 1 : 900)) fxGhosts.splice(i, 1);
+  if (!reduced || dirty || sparks.length || ui.hold || fx || fxGhosts.length) { draw(); dirty = false; }
   updateChips();
   requestAnimationFrame(frame);
 }
@@ -1079,7 +1239,7 @@ function canPlace(type, x, y, ignoreId) {
   }
   // painted shapes (roofs, chimneys, flags, props) must not touch either, even on separate tiles
   const vc = visualConflict(type, x, y, ignoreId);
-  if (vc) return {ok: false, reason: '屋根や建物がかさなって見えちゃうよ', with: vc.id};
+  if (vc) return {ok: false, reason: '屋根や建物がかさなって見えるよ', with: vc.id};
   return {ok: true};
 }
 const isUnlocked = type => ITEMS[type].need.every(k => S.skills[k] >= SKILL_NEED);
@@ -1197,7 +1357,7 @@ function renderExpand(body) {
   const t = document.createElement('span'); t.textContent = `${S.n}×${S.n} → ${S.n + 1}×${S.n + 1}マス（${(S.n + 1) ** 2}マス）／ 開拓点 ${cost} 必要（いま ${S.points}）`; row.appendChild(t);
   const ok = document.createElement('button'); ok.type = 'button'; ok.className = 'ok'; ok.textContent = '拡張する'; ok.disabled = !enough;
   ok.addEventListener('click', doExpand); row.appendChild(ok); body.appendChild(row);
-  const n = document.createElement('p'); n.className = 'note'; n.textContent = enough ? '建物はそのまま、まわりに土地が広がるよ。' : `あと ${cost - S.points} 点。「学ぶ」ボタンで開拓点をためよう（サンプルです）。`;
+  const n = document.createElement('p'); n.className = 'note'; n.textContent = enough ? '建物はそのまま。金色の木や茂みが切り開かれて、森がひとつ後ろへ下がるよ。' : `あと ${cost - S.points} 点。「学ぶ」ボタンで開拓点をためよう（サンプルです）。`;
   body.appendChild(n);
 }
 const STUDY = {
@@ -1241,10 +1401,25 @@ function doExpand() {
   if (S.n >= N_MAX) return;
   const cost = EXPAND_COST[S.n + 1];
   if (S.points < cost) { toast('開拓点が足りないよ'); return; }
-  S.points -= cost; S.n++;
-  updateHUD(); layout(); // recompute target for the new size
+  // 1) what is painted right now and will be cleared by the new size (measured in the current view)
+  const oldN = S.n, newN = oldN + 1, P0 = curP(), tw0 = view.tw, lp0 = landPoly(P0, tw0, .25), now = performance.now();
+  const cleared = wild.map(o => ({o, info: wildInfo(o, P0, tw0, lp0, oldN)})).filter(q => q.info && !wildVisible(q.o, newN));
+  // 2) the land itself grows; the camera eases out to fit it
+  S.points -= cost; S.n = newN;
+  updateHUD(); layout();
+  // 3) feedback: new tiles flash outward from the centre, trees shrink away with leaf puffs, the painted forest recedes
+  const lo = loOf(newN), c = oldN / 2 + loOf(oldN), tiles = [];
+  for (let x = lo; x < lo + newN; x++) for (let y = lo; y < lo + newN; y++) {
+    if (x >= loOf(oldN) && x < loOf(oldN) + oldN && y >= loOf(oldN) && y < loOf(oldN) + oldN) continue;
+    tiles.push({x, y, delay: Math.hypot(x + .5 - c, y + .5 - c) * .09, sx: .3 + ((x * 7 + y * 3) % 5) * .1, sy: .3 + ((x * 3 + y * 7) % 5) * .1});
+  }
+  fx = {t0: now, tiles, span: tiles.reduce((m, t) => Math.max(m, t.delay), 0)};
+  fxGhosts.length = 0;
+  cleared.forEach(q => fxGhosts.push({o: q.o, type: q.info.type, t0: now}));
+  if (!reduced) cleared.slice(0, 40).forEach(q => spawnSparks(q.info.p[0], q.info.p[1] - q.info.s * .35, 2, ['#bfe58a', '#fffbd0', '#8fc96a']));
   spawnSparks(view.cx, view.cy, 24, ['#ffe08a', '#fff', '#b9e48d']);
-  toast(`🌱 土地が ${S.n * S.n} マスに広がったよ！`);
+  bgPrev = bg; bgFade = reduced ? 0 : 1; bg = buildBackdrop(W, H, dpr, stageOf(newN)); if (reduced) bgPrev = null;
+  toast(`🌱 森を切り開いて、土地が ${S.n * S.n} マスに広がったよ！`);
   sheetBody.innerHTML = ''; renderExpand(sheetBody); dirty = true;
 }
 function setGhost(tile) {
@@ -1255,12 +1430,12 @@ function setGhost(tile) {
   ui.ghost = {x, y, ok: res.ok, reason: res.reason, with: res.with};
   if (ui.lifted) {                      // long-press move: a single tap on a valid spot commits
     const b = S.blds.find(q => q.id === ui.moveId);
-    if (res.ok && b.x === x && b.y === y) { ui.ghost.ok = false; ui.ghost.reason = 'いまの場所だよ'; }
+    if (res.ok && b.x === x && b.y === y) { ui.ghost.ok = false; ui.ghost.reason = 'いまの場所だよ'; ui.ghost.same = true; }
     showAction(ui.ghost.ok ? it.name + 'をここへ（タップで決定）' : 'ここには動かせない：' + ui.ghost.reason, '', false);
     actionbar.classList.add('lifted');
   } else if (ui.mode === 'build') {
     const free = (S.stored[type] || 0) > 0;
-    if (!res.ok) showAction('ここには置けない：' + res.reason, '建てる', false);
+    if (!res.ok) showAction('置けない：' + res.reason, '建てる', false);
     else if (!free && !canAfford(type)) showAction('材料が足りないよ（' + costText(it.cost) + '）', '建てる', false);
     else showAction(free ? 'しまってある' + it.name + 'を置く' : it.name + 'を建てる（' + costText(it.cost) + '）', '建てる', true);
   } else {
@@ -1306,6 +1481,7 @@ function askStore(b) {
   const it = ITEMS[b.type];
   $('modalTitle').textContent = it.name + 'をしまう？';
   $('modalText').textContent = '建物はなくなりません。「建てる」の中に保管されて、材料なしでまた置けます。';
+  $('toast').hidden = true; chips.hidden = true;                 // nothing else competes with the confirmation dialog
   $('modal').hidden = false; $('modal').dataset.id = b.id; $('modalOk').focus();
 }
 function doStore(id) {
@@ -1357,6 +1533,7 @@ function onTap(px, py) {
       if (ui.lifted && ui.moveId) {
         if (!tile) { ui.badAt = performance.now(); toast('土地の中をタップしてね'); dirty = true; break; }
         setGhost(tile);
+        if (ui.ghost.same) { enterMode('explore'); setHint('もとの場所にもどしたよ', 2200); break; }     // tapping where it already stands cancels
         if (ui.ghost.ok) confirmAction();
         else { ui.badAt = performance.now(); if (navigator.vibrate) navigator.vibrate([20, 40, 20]); }
         break;
@@ -1386,6 +1563,7 @@ function clearHold() { if (down && down.timer) { clearTimeout(down.timer); down.
 canvas.addEventListener('pointerdown', e => {
   if (down && down.id !== e.pointerId) { clearHold(); down = null; return; }           // second finger: abandon
   down = {x: e.clientX, y: e.clientY, t: performance.now(), id: e.pointerId, fired: false, timer: 0};
+  try { canvas.setPointerCapture(e.pointerId); } catch (_) { /* capture keeps pointerup coming to us after a long press */ }
   if (ui.mode === 'explore' && !ui.lifted && $('modal').hidden) {
     const hit = hitBuilding(e.clientX, e.clientY);
     if (hit) {
@@ -1405,7 +1583,7 @@ canvas.addEventListener('pointerup', e => {
 canvas.addEventListener('pointercancel', () => { clearHold(); down = null; });
 canvas.addEventListener('contextmenu', e => e.preventDefault());
 ['blur', 'scroll'].forEach(n => window.addEventListener(n, () => { clearHold(); down = null; }, true));
-document.addEventListener('visibilitychange', () => { clearHold(); down = null; });
+document.addEventListener('visibilitychange', () => { clearHold(); down = null; if (document.hidden && ui.lifted) enterMode('explore'); });
 canvas.addEventListener('pointermove', e => {
   if (down && down.id === e.pointerId && !down.fired && Math.hypot(e.clientX - down.x, e.clientY - down.y) > HOLD_SLOP) clearHold();   // finger drifted: not a long press
   if (e.pointerType !== 'mouse' || e.buttons) return;               // mouse hover preview
@@ -1425,8 +1603,12 @@ chips.addEventListener('click', e => {
 });
 function updateChips() {
   const b = ui.mode === 'explore' && ui.sel ? S.blds.find(q => q.id === ui.sel) : null;
-  chips.hidden = !b;
-  if (b) { const it = ITEMS[b.type], p = curP()(b.x + it.w / 2, b.y + it.h, 0); chips.style.left = clamp(p[0], 90, W - 90) + 'px'; chips.style.top = (p[1] + 10) + 'px'; }
+  chips.hidden = !b || !$('modal').hidden;
+  if (b) {
+    // keep the chips clear of the bottom bar / open sheet, and never under the HUD
+    const it = ITEMS[b.type], p = curP()(b.x + it.w / 2, b.y + it.h, 0), lim = area.bottom - 50;
+    chips.style.left = clamp(p[0], 100, W - 100) + 'px'; chips.style.top = clamp(p[1] + 10, area.top, Math.max(area.top, lim)) + 'px';
+  }
 }
 
 /* buttons */

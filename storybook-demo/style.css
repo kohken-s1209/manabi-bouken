@@ -31,8 +31,10 @@ button:focus-visible{outline:3px solid #2b7bd0;outline-offset:2px}
 .badge .ico{font-size:1.05em}
 .badge-land{flex-direction:column;align-items:flex-start;justify-content:center;gap:0;line-height:1.15;font-size:clamp(11px,3.3vw,14px);padding:3px 12px}
 .badge-land .sub{font-size:.88em;color:var(--green-d)}
-.hint{position:absolute;left:50%;transform:translateX(-50%);top:calc(var(--hud-h,120px) + 2px);max-width:min(92vw,520px);text-align:center;
-  padding:7px 16px;border-radius:999px;font-weight:800;font-size:clamp(12.5px,3.5vw,15px);background:rgba(255,246,224,.94);border:2px solid var(--edge);
+/* Centered overlays use width:max-content so left:50% never shrinks them to half the screen (that squeeze made text wrap one character per line). */
+.hint{position:absolute;left:50%;transform:translateX(-50%);top:calc(var(--hud-h,120px) + 2px);width:max-content;max-width:min(92vw,520px);text-align:center;
+  writing-mode:horizontal-tb;white-space:normal;overflow-wrap:break-word;line-break:strict;
+  padding:7px 16px;border-radius:18px;font-weight:800;font-size:clamp(12.5px,3.5vw,15px);background:rgba(255,246,224,.94);border:2px solid var(--edge);
   box-shadow:0 3px 8px rgba(70,50,20,.2);pointer-events:none;transition:opacity .2s}
 .hint:empty{opacity:0}
 
@@ -56,10 +58,12 @@ button:focus-visible{outline:3px solid #2b7bd0;outline-offset:2px}
 .fab:active{transform:translateY(3px)}
 
 /* ---------- action bar / sheet ---------- */
-.actionbar{position:absolute;left:50%;transform:translateX(-50%);bottom:calc(var(--above) + 8px);z-index:6;display:flex;align-items:center;gap:8px;
-  padding:7px 8px 7px 16px;border-radius:999px;background:var(--cream);border:2.5px solid var(--edge);box-shadow:0 5px 12px rgba(60,40,15,.35);
-  font-weight:800;font-size:14px;max-width:96vw}
-.actionbar span{flex:1;min-width:0}
+.actionbar{position:absolute;left:calc(var(--sal) + 8px);right:calc(var(--sar) + 8px);margin:0 auto;width:fit-content;max-width:min(560px,calc(100% - 16px));
+  bottom:calc(var(--above) + 8px);z-index:6;display:flex;align-items:center;gap:8px;
+  padding:6px 8px 6px 14px;border-radius:24px;background:var(--cream);border:2.5px solid var(--edge);box-shadow:0 5px 12px rgba(60,40,15,.35);
+  font-weight:800;font-size:13.5px;line-height:1.4;writing-mode:horizontal-tb}
+.actionbar span{flex:1 1 9em;min-width:9em;white-space:normal;overflow-wrap:break-word;line-break:strict}
+.actionbar .ok,.actionbar .cancel{flex:none;min-width:68px;padding:0 12px}
 .ok,.cancel{min-height:44px;min-width:76px;border-radius:999px;border:2px solid;font-weight:900;padding:0 16px}
 .ok{background:linear-gradient(#a6dd72,#6cae4f);border-color:#4b8a38;color:#fff;text-shadow:0 1px 0 #3a6f2a}
 .actionbar.lifted{border-color:#e0a63a;background:linear-gradient(#fffbe8,#ffeeb8)}
@@ -97,19 +101,25 @@ button:focus-visible{outline:3px solid #2b7bd0;outline-offset:2px}
 .expand-info .ok{margin-left:auto}
 
 /* ---------- toast / modal / floaters ---------- */
-.toast{position:absolute;left:50%;transform:translateX(-50%);bottom:calc(var(--above) + 70px);z-index:8;display:flex;align-items:center;gap:10px;
-  padding:9px 10px 9px 16px;border-radius:999px;background:rgba(74,52,30,.92);color:#fff8e6;font-weight:800;font-size:14px;max-width:94vw;box-shadow:0 5px 12px rgba(0,0,0,.3)}
-.toast button{min-height:36px;padding:0 12px;border-radius:999px;border:0;background:#ffe08a;color:#5a4128;font-weight:900}
-.modal{position:absolute;inset:0;z-index:10;display:flex;align-items:center;justify-content:center;background:rgba(40,30,15,.4);padding:16px}
-.dialog{width:min(92vw,360px);padding:18px;border-radius:24px;background:var(--cream);border:3px solid var(--edge);box-shadow:0 10px 30px rgba(0,0,0,.4);text-align:center}
-.dialog h3{margin:0 0 6px;font-size:18px}
-.dialog p{margin:0 0 14px;font-size:14px;line-height:1.6;color:var(--ink2);font-weight:700}
-.dialog-btns{display:flex;gap:10px;justify-content:center}
+.toast{position:absolute;left:calc(var(--sal) + 8px);right:calc(var(--sar) + 8px);margin:0 auto;width:fit-content;max-width:min(520px,calc(100% - 16px));
+  bottom:var(--toast-b,calc(var(--above) + 70px));z-index:8;display:flex;align-items:center;gap:10px;writing-mode:horizontal-tb;
+  padding:8px 10px 8px 16px;border-radius:20px;background:rgba(74,52,30,.92);color:#fff8e6;font-weight:800;font-size:13.5px;line-height:1.4;box-shadow:0 5px 12px rgba(0,0,0,.3)}
+.toast span{min-width:8em;white-space:normal;overflow-wrap:break-word;line-break:strict}
+.toast button{flex:none;min-height:36px;padding:0 12px;border-radius:999px;border:0;background:#ffe08a;color:#5a4128;font-weight:900}
+.modal{position:absolute;inset:0;z-index:10;display:flex;align-items:center;justify-content:center;background:rgba(40,30,15,.4);
+  padding:calc(var(--sat) + 12px) calc(var(--sar) + 12px) calc(var(--sab) + 12px) calc(var(--sal) + 12px);overflow:auto}
+/* Dialog: fixed horizontal writing mode, a width that survives 360px phones, scrolls instead of overflowing the screen. */
+.dialog{flex:0 1 auto;width:min(100%,340px);max-height:100%;overflow:auto;padding:16px 16px 14px;border-radius:22px;background:var(--cream);border:3px solid var(--edge);
+  box-shadow:0 10px 30px rgba(0,0,0,.4);text-align:center;writing-mode:horizontal-tb;text-orientation:mixed;direction:ltr}
+.dialog h3{margin:0 0 8px;font-size:17px;line-height:1.35;white-space:normal;overflow-wrap:break-word;line-break:strict}
+.dialog p{margin:0 0 14px;font-size:14px;line-height:1.65;color:var(--ink2);font-weight:700;text-align:left;white-space:normal;word-break:normal;overflow-wrap:break-word;line-break:strict}
+.dialog-btns{display:flex;flex-wrap:wrap;gap:10px;justify-content:center}
+.dialog-btns button{flex:1 1 120px;min-width:0;padding:0 12px}
 .float{position:absolute;z-index:9;pointer-events:none;font-weight:900;font-size:18px;color:#fff;text-shadow:0 2px 0 #7a5a2c,0 0 6px #7a5a2c;animation:floatUp 1.4s ease-out forwards}
 @keyframes floatUp{0%{opacity:0;transform:translate(-50%,10px) scale(.7)}15%{opacity:1}100%{opacity:0;transform:translate(-50%,-70px) scale(1.15)}}
 
 /* ---------- selected-building chips ---------- */
-.chips{position:absolute;z-index:6;transform:translateX(-50%);display:flex;gap:6px}
+.chips{position:absolute;z-index:6;transform:translateX(-50%);display:flex;gap:6px;width:max-content;white-space:nowrap}
 .chips button{min-height:44px;padding:0 14px;border-radius:999px;border:2.5px solid var(--edge);background:linear-gradient(#fffdf5,var(--cream2));
   font-weight:900;font-size:14px;color:var(--ink);box-shadow:0 3px 0 #b99555,0 6px 10px rgba(60,40,15,.3)}
 
