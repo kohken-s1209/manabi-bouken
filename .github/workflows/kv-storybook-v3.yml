@@ -52,6 +52,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: kv-storybook-v3-candidate
-          path: kv-v2-artifact/
+          path: kv-v3-artifact/
           if-no-files-found: error
           retention-days: 7
