@@ -7,9 +7,34 @@ Files: `index.html`, `style.css`, `app.js` (plus this README). `IMPLEMENTATION_B
 
 ## Safety / isolation
 - No network requests, no external fonts/scripts/images, no secrets, no analytics.
-- **Storage (v8):** exactly one `localStorage` key, `kv-storybook-demo:v8` (plus a `…:damaged` copy only if a save could not be parsed). The main app's storage is never read or written; no cookies, no `sessionStorage`. If storage is blocked, the demo works in memory and says so in the parent panel.
+- **Storage (v8, plus v10 reading settings):** the save key `kv-storybook-demo:v8`, and since v10 one more small additive key `kv-storybook-demo:v10-reading` for the ふりがな / kanji-level settings (plus a `…:damaged` copy only if a save could not be parsed). The main app's storage is never read or written; no cookies, no `sessionStorage`. If storage is blocked, the demo works in memory and says so in the parent panel.
 - Rewards (v8) come only from correctly answered questions — see the v8 section. The old "press a button, get resources" study buttons are gone.
 - Nothing outside `storybook-demo/` was touched.
+
+## v10 changes (from `V10_FEEDBACK.md`) — kanji readability layer (ふりがな)
+**Verification status — read first:** edited by reading only. In this sandbox `node`, `python` and a browser were **not approved to run**, so nothing was executed: no syntax check, no `selfTest()`, nothing seen at 360px or on a tablet. Before relying on it run `KVLearn.selfTest()` (Node: `node -e "console.log(require('./app.js').selfTest())"`) — it now includes `KVRead.check()` — and open the page at ~360px and ≥768px. No network, no libraries, nothing downloaded.
+
+**What changed**
+- Question text, hints, explanations and choices (math add/subtract/multiply templates, Japanese items) now use natural kanji vocabulary (全部で, 何人, 公園, 来ました, 合わせて, 友だち, 読みました, 買います …). Arithmetic, answers, choices and reward logic are untouched; only strings changed.
+- **Display layer `KVLearn.read` (`KVRead`):** each kanji word is looked up in a hand-written vocabulary table (`VOCAB_SRC`) with explicit readings. A word whose kanji are all "known" is shown plainly; otherwise it gets `<ruby>/<rt>` built with DOM nodes (no `innerHTML`). Okurigana stay outside the ruby (`<ruby>来<rt>き</rt></ruby>ました`). Readings are never derived from single characters. A kanji that is in no table entry is flagged by `selfTest()` (so it is fixed in the table or reworded) rather than guessed.
+- Numeral + counter (`3人`, `2日`) is never annotated, because the reading depends on the numeral (ひとり, ふつか). Reading-exercise quotes (`「山」は どう読む？`) stay un-annotated on purpose, otherwise the answer would be printed above the question.
+- **Reading level (parent panel, behind the existing arithmetic gate → 漢字の よみやすさ):** ① 1年生の漢字まで ② 1年生＋2年生の一部 (**default**) ③ 2年生の漢字ぜんぶ ④ ぜんぶ漢字＋ふりがな. Grade sets are the official 学年別漢字配当表 (1年 80字, 2年 160字; counts are asserted in `check()`). The partial set is only `何今数算国語読書来行時分間`, a conservative guess; **the demo does not know which kanji the school has taught** (check the 光村図書 yearly plan: https://www.mitsumura-tosho.co.jp/kyokasho/s-kokugo/keikaku and the child's own notebook/textbook). Parents can add 「おぼえた漢字」 (and remove them again with ×); marks only change display.
+- **ふりがな あり／なし** button (study home, each question, parent panel): あり = unknown words get ruby; なし = unknown words appear in kana from the same table (never as bare unknown kanji). It does not change the kanji level.
+- **Storage:** the village/learning save (`kv-storybook-demo:v8`, `SAVE_V` 8) is neither read differently nor rewritten. The new settings live in their own versioned key `kv-storybook-demo:v10-reading` (`{v:1, level, ruby, extra:[…]}`), validated on load (unknown level/garbage → defaults), so removing it loses nothing else. Pending questions keep their ids and seeds; a question mid-flight may lose a recorded wrong-choice mark if its wording changed (harmless).
+- CSS: ruby line height, `.q-top` wraps, choices wrap; only existing layout classes plus a few new ones.
+
+**Manual QA — 8 before/after samples** (`X(よみ)` = ruby; numbers vary per question)
+| # | Setting | Before (v9) | After (v10) |
+|---|---|---|---|
+| 1 | 1年生まで, あり | ぜんぶで なん人 ですか。 | 全部(ぜんぶ)で 何人(なんにん) ですか。（クラスに 男の子が 5人、女の子が 3人 います。） |
+| 2 | 1年生まで, あり | こうえんに こどもが 4人 いました。あとから 3人 きました。いま なん人 いますか。 | 公園(こうえん)に 子どもが 4人 いました。あとから 3人 来(き)ました。今(いま) 何人(なんにん) いますか。（子は 1年生の漢字） |
+| 3 | 1年生＋2年生の一部（初期）, あり | 同上 | 公園(こうえん)に 子どもが 4人 いました。あとから 3人 来ました。今 何人 いますか。 |
+| 4 | 初期, ふりがな なし | 同上 | こうえんに 子どもが 4人 いました。あとから 3人 来ました。今 何人 いますか。 |
+| 5 | 2年生ぜんぶ, あり | りんごが 〇こ … ぜんぶで なんこ ですか。 | 全部(ぜんぶ)で 何こ ですか。（公園・友だち・買う・読む は そのまま） |
+| 6 | 1年生まで, あり | 〇ページの ほんを 〇ページ よみました。まだ よんでいないのは なんページですか。 | 〇ページの 本を 〇ページ 読(よ)みました。まだ 読(よ)んでいないのは 何(なん)ページですか。 |
+| 7 | ぜんぶ漢字＋ふりがな | あかい りんごが … おおいですか。 | 赤(あか)い りんごが …、白(しろ)い りんごが … あります。赤(あか)いほうが 何(なん)こ 多(おお)いですか。（数字＋人／日 だけは 注記なし） |
+| 8 | 初期, あり | 「あめが ふってきたので、かさを さしました。」 | 「雨(あめ)が…」は 1年生の 漢字なので 初期設定では 雨が（ルビなし）、ぜんぶ漢字＋ふりがな では 雨(あめ)が。「山」は どう読む？ は いつも ルビなし。 |
+Rows are written from the rules above, not from screenshots. Check them in the page (学ぶ → 算数 / 国語; the examples depend on the random numbers and objects).
 
 ## v9 changes (from `V9_FEEDBACK.md`) — grade-2 multiplication track + mastery model
 **Verification status — read first:** written and re-read by hand only. In this sandbox `node` (even `node --check`) and any browser **required approval that was not granted**, so **nothing was executed**: no syntax check, no self-test run, nothing seen on a phone. Run the checks below before relying on it. No claim is made about the school's actual pace, 大日本図書 materials or curriculum alignment beyond "original grade-2-level problems"; no textbook text or diagrams were reproduced.
