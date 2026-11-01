@@ -27,7 +27,7 @@ const isInt = v => typeof v === 'number' && Number.isFinite(v) && Math.floor(v) 
 const OBJ = [['りんご', 'こ'], ['どんぐり', 'こ'], ['シール', 'まい'], ['えんぴつ', 'ほん'], ['あめ', 'こ'], ['おりがみ', 'まい'], ['ビーだま', 'こ'], ['みかん', 'こ'], ['クッキー', 'まい'], ['きんぎょ', 'ひき']];
 const CH = [['うさぎさん', 'くまさん'], ['りすさん', 'たぬきさん'], ['ことりさん', 'きつねさん'], ['ぞうさん', 'かばさん']];
 const TOPIC = {
-  gather:      {label: 'あわせて・ぜんぶで', op: '+', hint: '「あわせて」「ぜんぶで」は、2つの数を くっつけるよ。くっつけるのは たしざん。絵や ○をかいて かぞえてみよう。'},
+  gather:      {label: '合わせて・全部で', op: '+', hint: '「合わせて」「全部で」は、2つの数を くっつけるよ。くっつけるのは たしざん。絵や ○をかいて 数えてみよう。'},
   increase:    {label: 'ふえる・もらう',     op: '+', hint: '「ふえた」「もらった」「のった」は 数が おおきくなるね。はじめの数に あとからの数を たしてみよう。'},
   compareMore: {label: '〜より おおい',      op: '+', hint: '「〜より ○おおい」は、もとの数から ○ふやした数だよ。もとの数に たしてみよう。'},
   reverseAdd:  {label: 'ことばと しきがちがう（たし）', op: '+', hint: 'ことばに だまされないで！「たべたら のこりが…」は へったようにみえるけど、たべた分と のこりを くっつけると はじめの数に もどるよ。'},
@@ -38,8 +38,8 @@ const TOPIC = {
 /* v9 multiplication topics. Convention used everywhere: 「1つ分の数 × いくつ分」 (e.g. 3こずつ 4さら = 3 × 4). The swapped product is never offered as a "wrong" choice. */
 const MT = (label, hint, hard) => ({label, op: '×', hint, hard: !!hard});
 Object.assign(TOPIC, {
-  groups: MT('おなじ数ずつ・たしざん', 'おなじ数ずつの グループは、おなじ数を くりかえし たすと ぜんぶの数が わかるよ。絵や ○を かいて かぞえてみよう。'),
-  expr:   MT('かけざんの しき', 'かけざんの しきは「1つ分の数 × いくつ分」の じゅんに かくよ。おはなしの「ずつ」の 数が 1つ分だよ。'),
+  groups: MT('同じ数ずつ・たしざん', '同じ数ずつの グループは、同じ数を くりかえし たすと 全部の数が わかるよ。絵や ○を かいて 数えてみよう。'),
+  expr:   MT('かけざんの しき', 'かけざんの しきは「1つ分の数 × いくつ分」の じゅんに かくよ。お話の「ずつ」の 数が 1つ分だよ。'),
   t2: MT('2のだん', '2のだんは 2ずつ ふえるよ。2, 4, 6, 8 … と となえてみよう。'),
   t5: MT('5のだん', '5のだんは 5ずつ ふえるよ。5, 10, 15 … 一のくらいは 5と 0の くりかえしだよ。'),
   t3: MT('3のだん', '3のだんは 3ずつ ふえるよ。3, 6, 9, 12 … と となえてみよう。'),
@@ -49,41 +49,41 @@ Object.assign(TOPIC, {
   t8: MT('8のだん', '8のだんは 8ずつ ふえるよ。わからない ときは ひとつ まえの 答えに 8を たしてみよう。', 1),
   t9: MT('9のだん', '9のだんは 9ずつ ふえるよ。わからない ときは ひとつ まえの 答えに 9を たしてみよう。', 1),
   t1: MT('1のだん', '1のだんは 1つ分が 1だから、いくつ分でも その数と おなじだよ。'),
-  mword: MT('かけざんの 文しょうだい', 'まず「1つ分」と「いくつ分」を さがそう。おなじ数ずつなら かけざん。くっつける・のこりを しらべるなら たしざん・ひきざんだよ。', 1),
+  mword: MT('かけざんの 文しょうだい', 'まず「1つ分」と「いくつ分」を さがそう。同じ数ずつなら かけざん。くっつける・のこりを しらべるなら たしざん・ひきざんだよ。', 1),
 });
 for (const k of ['reverseAdd', 'reverseSub']) TOPIC[k].hard = true;       // harder v8 topics earn the modest independent-solve bonus too
 const T = (id, topic, cap, text) => ({id, topic, op: TOPIC[topic].op, cap, text});
 const MATH_TEMPLATES = [
   // --- addition solves (14) ---
-  T('g1', 'gather', 20, (a, b, o, p, q) => `${p}は ${o[0]}を ${a}${o[1]}、${q}は ${b}${o[1]} もっています。あわせて なん${o[1]}ですか。`),
-  T('g2', 'gather', 30, (a, b, o) => `はこに ${o[0]}が ${a}${o[1]}、かごに ${b}${o[1]} はいっています。ぜんぶで なん${o[1]}ですか。`),
-  T('g3', 'gather', 40, (a, b) => `クラスに 男の子が ${a}人、女の子が ${b}人 います。ぜんぶで なん人 ですか。`),
-  T('g4', 'gather', 30, (a, b, o) => `赤い ${o[0]}が ${a}${o[1]}、白い ${o[0]}が ${b}${o[1]} あります。ぜんぶで なん${o[1]}ですか。`),
-  T('g5', 'gather', 50, (a, b) => `ひもを ${a}cm と ${b}cm、つなぎました。ぜんぶで なんcm ですか。`),
-  T('g6', 'gather', 100, (a, b) => `${a}円の ガムと ${b}円の ラムネを かいます。あわせて なん円ですか。`),
-  T('i1', 'increase', 20, (a, b, o, p) => `${p}は ${o[0]}を ${a}${o[1]} もっていました。${b}${o[1]} もらいました。ぜんぶで なん${o[1]}ですか。`),
-  T('i2', 'increase', 30, (a, b) => `こうえんに こどもが ${a}人 いました。あとから ${b}人 きました。いま なん人 いますか。`),
-  T('i3', 'increase', 60, (a, b) => `バスに ${a}人 のっていました。つぎの ていりゅうじょで ${b}人 のりました。バスには なん人 のっていますか。`),
-  T('m1', 'compareMore', 30, (a, b, o, p, q) => `${p}は ${o[0]}を ${a}${o[1]} もっています。${q}は ${p}より ${b}${o[1]} おおく もっています。${q}は なん${o[1]}ですか。`),
-  T('m2', 'compareMore', 50, (a, b) => `あかチームは ${a}てん です。しろチームは あかチームより ${b}てん おおいです。しろチームは なんてんですか。`),
-  T('ra1', 'reverseAdd', 30, (a, b, o) => `${o[0]}が なんこか ありました。${a}${o[1]} たべたら、のこりが ${b}${o[1]} に なりました。はじめに なん${o[1]} ありましたか。`),
-  T('ra2', 'reverseAdd', 50, (a, b, o) => `ふくろから ${o[0]}を ${a}${o[1]} とりだしたら、ふくろには ${b}${o[1]} のこりました。ふくろには はじめに なん${o[1]} はいっていましたか。`),
-  T('ra3', 'reverseAdd', 40, (a, b, o, p, q) => `${p}は ${q}に ${o[0]}を ${a}${o[1]} あげました。${p}の ${o[0]}は ${b}${o[1]} に なりました。${p}は はじめに なん${o[1]} もっていましたか。`),
+  T('g1', 'gather', 20, (a, b, o, p, q) => `${p}は ${o[0]}を ${a}${o[1]}、${q}は ${b}${o[1]} もっています。合わせて 何${o[1]}ですか。`),
+  T('g2', 'gather', 30, (a, b, o) => `はこに ${o[0]}が ${a}${o[1]}、かごに ${b}${o[1]} はいっています。全部で 何${o[1]}ですか。`),
+  T('g3', 'gather', 40, (a, b) => `クラスに 男の子が ${a}人、女の子が ${b}人 います。全部で 何人 ですか。`),
+  T('g4', 'gather', 30, (a, b, o) => `赤い ${o[0]}が ${a}${o[1]}、白い ${o[0]}が ${b}${o[1]} あります。全部で 何${o[1]}ですか。`),
+  T('g5', 'gather', 50, (a, b) => `ひもを ${a}cm と ${b}cm、つなぎました。全部で 何cm ですか。`),
+  T('g6', 'gather', 100, (a, b) => `${a}円の ガムと ${b}円の ラムネを 買います。合わせて 何円ですか。`),
+  T('i1', 'increase', 20, (a, b, o, p) => `${p}は ${o[0]}を ${a}${o[1]} もっていました。${b}${o[1]} もらいました。全部で 何${o[1]}ですか。`),
+  T('i2', 'increase', 30, (a, b) => `公園に 子どもが ${a}人 いました。あとから ${b}人 来ました。今 何人 いますか。`),
+  T('i3', 'increase', 60, (a, b) => `バスに ${a}人 のっていました。つぎの ていりゅうじょで ${b}人 のりました。バスには 何人 のっていますか。`),
+  T('m1', 'compareMore', 30, (a, b, o, p, q) => `${p}は ${o[0]}を ${a}${o[1]} もっています。${q}は ${p}より ${b}${o[1]} 多く もっています。${q}は 何${o[1]}ですか。`),
+  T('m2', 'compareMore', 50, (a, b) => `赤チームは ${a}てん です。白チームは 赤チームより ${b}てん 多いです。白チームは 何てんですか。`),
+  T('ra1', 'reverseAdd', 30, (a, b, o) => `${o[0]}が 何こか ありました。${a}${o[1]} たべたら、のこりが ${b}${o[1]} に なりました。はじめに 何${o[1]} ありましたか。`),
+  T('ra2', 'reverseAdd', 50, (a, b, o) => `ふくろから ${o[0]}を ${a}${o[1]} とりだしたら、ふくろには ${b}${o[1]} のこりました。ふくろには はじめに 何${o[1]} はいっていましたか。`),
+  T('ra3', 'reverseAdd', 40, (a, b, o, p, q) => `${p}は ${q}に ${o[0]}を ${a}${o[1]} あげました。${p}の ${o[0]}は ${b}${o[1]} に なりました。${p}は はじめに 何${o[1]} もっていましたか。`),
   // --- subtraction solves (14) ---
-  T('r1', 'remain', 20, (a, b, o, p) => `${p}は ${o[0]}を ${a}${o[1]} もっていました。${b}${o[1]} たべました。のこりは なん${o[1]}ですか。`),
-  T('r2', 'remain', 30, (a, b, o) => `${a}${o[1]}の ${o[0]}の うち、${b}${o[1]}を ともだちに あげました。のこりは なん${o[1]}ですか。`),
-  T('r3', 'remain', 50, (a, b) => `バスに ${a}人 のっていました。ていりゅうじょで ${b}人 おりました。バスには いま なん人 のっていますか。`),
-  T('r4', 'remain', 100, (a, b) => `${a}円 もっていました。${b}円の おかしを かいました。のこりは なん円ですか。`),
-  T('r5', 'remain', 99, (a, b) => `${a}ページの ほんを ${b}ページ よみました。まだ よんでいないのは なんページですか。`),
-  T('r6', 'remain', 40, (a, b) => `${a}まいの チケットから ${b}まい つかいました。のこりは なんまい ですか。`),
-  T('c1', 'compare', 30, (a, b, o) => `赤い ${o[0]}が ${a}${o[1]}、白い ${o[0]}が ${b}${o[1]} あります。赤いほうが なん${o[1]} おおいですか。`),
-  T('c2', 'compare', 40, (a, b) => `にんじんが ${a}ほん、ピーマンが ${b}ほん あります。にんじんは ピーマンより なんぼん おおいですか。`),
-  T('c3', 'compare', 50, (a, b, o, p, q) => `${p}は ${o[0]}を ${a}${o[1]} もっています。${q}は ${b}${o[1]} です。${q}は ${p}より なん${o[1]} すくないですか。`),
-  T('c4', 'compare', 60, (a, b) => `ながい ひもは ${a}cm、みじかい ひもは ${b}cm です。ながさの ちがいは なんcm ですか。`),
-  T('c5', 'compare', 99, (a, b) => `あおチームは ${a}てん、きいろチームは ${b}てん です。あおチームは なんてん かっていますか。`),
-  T('rs1', 'reverseSub', 30, (a, b, o, p) => `${p}は ${o[0]}を なんこか もっていました。${b}${o[1]} もらったので、${a}${o[1]} に なりました。はじめに なん${o[1]} もっていましたか。`),
-  T('rs2', 'reverseSub', 50, (a, b, o) => `かごに ${o[0]}を ${b}${o[1]} いれたら、ぜんぶで ${a}${o[1]} に なりました。はじめに かごには なん${o[1]} ありましたか。`),
-  T('rs3', 'reverseSub', 60, (a, b) => `ともだちが ${b}人 きて、ぜんぶで ${a}人 に なりました。はじめは なん人 いましたか。`),
+  T('r1', 'remain', 20, (a, b, o, p) => `${p}は ${o[0]}を ${a}${o[1]} もっていました。${b}${o[1]} たべました。のこりは 何${o[1]}ですか。`),
+  T('r2', 'remain', 30, (a, b, o) => `${a}${o[1]}の ${o[0]}の うち、${b}${o[1]}を 友だちに あげました。のこりは 何${o[1]}ですか。`),
+  T('r3', 'remain', 50, (a, b) => `バスに ${a}人 のっていました。ていりゅうじょで ${b}人 おりました。バスには 今 何人 のっていますか。`),
+  T('r4', 'remain', 100, (a, b) => `${a}円 もっていました。${b}円の おかしを 買いました。のこりは 何円ですか。`),
+  T('r5', 'remain', 99, (a, b) => `${a}ページの 本を ${b}ページ 読みました。まだ 読んでいないのは 何ページですか。`),
+  T('r6', 'remain', 40, (a, b) => `${a}まいの チケットから ${b}まい つかいました。のこりは 何まい ですか。`),
+  T('c1', 'compare', 30, (a, b, o) => `赤い ${o[0]}が ${a}${o[1]}、白い ${o[0]}が ${b}${o[1]} あります。赤いほうが 何${o[1]} 多いですか。`),
+  T('c2', 'compare', 40, (a, b) => `にんじんが ${a}ほん、ピーマンが ${b}ほん あります。にんじんは ピーマンより 何ほん 多いですか。`),
+  T('c3', 'compare', 50, (a, b, o, p, q) => `${p}は ${o[0]}を ${a}${o[1]} もっています。${q}は ${b}${o[1]} です。${q}は ${p}より 何${o[1]} 少ないですか。`),
+  T('c4', 'compare', 60, (a, b) => `長い ひもは ${a}cm、短い ひもは ${b}cm です。長さの ちがいは 何cm ですか。`),
+  T('c5', 'compare', 99, (a, b) => `青チームは ${a}てん、黄色チームは ${b}てん です。青チームは 何てん かっていますか。`),
+  T('rs1', 'reverseSub', 30, (a, b, o, p) => `${p}は ${o[0]}を 何こか もっていました。${b}${o[1]} もらったので、${a}${o[1]} に なりました。はじめに 何${o[1]} もっていましたか。`),
+  T('rs2', 'reverseSub', 50, (a, b, o) => `かごに ${o[0]}を ${b}${o[1]} いれたら、全部で ${a}${o[1]} に なりました。はじめに かごには 何${o[1]} ありましたか。`),
+  T('rs3', 'reverseSub', 60, (a, b) => `友だちが ${b}人 来て、全部で ${a}人 に なりました。はじめは 何人 いましたか。`),
 ];
 
 /* ---------------- v9 multiplication track: 42 original generators (not in MATH_TEMPLATES, which stays the 28 v8 add/subtract templates) ----------------
@@ -110,35 +110,35 @@ const mulNum = (r, a, n, text, hint, explain, vis) => ({text, answer: a * n, num
 const MULT_TEMPLATES = [
   // (a) equal groups and repeated addition
   MU('gr1', 'groups', r => { const a = ri(r, 2, 5), n = sm(r, 2, 5, a), c = cobj(pick(r, CONT));
-    return mulNum(r, a, n, `${storyEq(c, a, n)}ぜんぶで なん${c.ic}ですか。`, TOPIC.groups.hint, `${repAdd(a, n)} = ${a * n}。${a}が ${n}つ分だから、しきは ${a} × ${n} = ${a * n}。こたえは ${a * n}${c.ic}だよ。`); }),
+    return mulNum(r, a, n, `${storyEq(c, a, n)}全部で 何${c.ic}ですか。`, TOPIC.groups.hint, `${repAdd(a, n)} = ${a * n}。${a}が ${n}つ分だから、しきは ${a} × ${n} = ${a * n}。答えは${a * n}${c.ic}だよ。`); }),
   MU('gr2', 'groups', r => { const a = ri(r, 2, 5), n = sm(r, 2, 5, a);
     return mulNum(r, a, n, `${repAdd(a, n)} は いくつですか。`, '同じ数を たしているよ。2つずつ、3つずつと じゅんに たしていこう。', `${repAdd(a, n)} = ${a * n}。${a}を ${n}かい たしたので、${a} × ${n} = ${a * n} とも かけるよ。`); }),
   MU('gr3', 'groups', r => { const a = ri(r, 2, 5), n = sm(r, 2, 6, a), c = cobj(pick(r, CONT));
     return {text: `${storyEq(c, a, n)}${a}${c.ic}ずつの グループは いくつ分 ありますか。`, answer: n, nums: [a, n], expr: `${a} × ${n}`, groups: [a, n], hint: '「ずつ」のまえの 数が 1つ分。その 1つ分が いくつ あるかを かぞえるよ。',
       choices: numChoices(r, n, [a, a * n, n + 1, n - 1], 12), explain: `${a}${c.ic}ずつが ${n}つ あるので、${n}つ分。しきは ${a} × ${n} だよ。`}; }),
   MU('gr4', 'groups', r => { const a = ri(r, 2, 5), n = ri(r, 2, 5), c = cobj(pick(r, CONT));
-    return mulNum(r, a, n + 1, `${c.cn}が ${n}${c.cc} あって、どの ${c.cn}にも ${c.it}が ${a}${c.ic}ずつ あります。${c.cn}が もう 1${c.cc} ふえて ${n + 1}${c.cc}に なると、ぜんぶで なん${c.ic}ですか。`, '1つ分は かわらないよ。いくつ分に なったかを たしかめて、かぞえなおそう。', `${a} が ${n + 1}つ分だから ${a} × ${n + 1} = ${a * (n + 1)}。こたえは ${a * (n + 1)}${c.ic}だよ。`); }),
+    return mulNum(r, a, n + 1, `${c.cn}が ${n}${c.cc} あって、どの ${c.cn}にも ${c.it}が ${a}${c.ic}ずつ あります。${c.cn}が もう 1${c.cc} ふえて ${n + 1}${c.cc}に なると、全部で 何${c.ic}ですか。`, '1つ分は かわらないよ。いくつ分に なったかを たしかめて、かぞえなおそう。', `${a} が ${n + 1}つ分だから ${a} × ${n + 1} = ${a * (n + 1)}。答えは${a * (n + 1)}${c.ic}だよ。`); }),
   MU('gr5', 'groups', r => { const a = ri(r, 2, 5), n = sm(r, 2, 5, a), pq = pick(r, CH);
-    return mulNum(r, a, n, `${pq[0]}は まいにち シールを ${a}まい ずつ はります。${n}日 つづけると、ぜんぶで なんまい はりましたか。`, '1日に はる数が 1つ分。それが なん日分 あるかな。', `1日 ${a}まいが ${n}日分だから ${a} × ${n} = ${a * n}。こたえは ${a * n}まいだよ。`); }),
+    return mulNum(r, a, n, `${pq[0]}は 毎日 シールを ${a}まい ずつ はります。${n}日 つづけると、全部で 何まい はりましたか。`, '1日に はる数が 1つ分。それが 何日分 あるかな。', `1日 ${a}まいが ${n}日分だから ${a} × ${n} = ${a * n}。答えは${a * n}まいだよ。`); }),
   // (b) the multiplication symbol: story <-> expression
   MU('e1', 'expr', r => { const a = ri(r, 2, 5), n = sm(r, 2, 5, a), c = cobj(pick(r, CONT)), ans = `${a} × ${n}`;
-    return {text: `${storyEq(c, a, n)}ぜんぶの 数を もとめる しきは どれですか。`, answer: ans, nums: [a, n], expr: ans, groups: [a, n], hint: TOPIC.expr.hint,
+    return {text: `${storyEq(c, a, n)}全部の 数を もとめる しきは どれですか。`, answer: ans, nums: [a, n], expr: ans, groups: [a, n], hint: TOPIC.expr.hint,
       choices: strChoices(r, ans, [`${a} + ${n}`, `${a} × ${n + 1}`, `${a + 1} × ${n}`, `${a} × ${n - 1}`]), explain: `「1つ分の数 × いくつ分」だから、${a}${c.ic}ずつ ${n}つ分の しきは ${ans} だよ。`}; }),
   MU('e2', 'expr', r => { const a = ri(r, 2, 5), n = sm(r, 2, 5, a), c = cobj(pick(r, CONT.slice(0, 4))), ans = `${c.cn}が ${n}${c.cc}、1${c.cc}に ${c.it}が ${a}${c.ic}ずつ`;
     return {text: `かけざんの しき「${a} × ${n}」に あう おはなしは どれですか。`, answer: ans, nums: [a, n], expr: `${a} × ${n}`, groups: null, hint: '「ずつ」で おなじ数が ならんでいる おはなしが かけざんだよ。あわせる・とる おはなしでは ないよ。',
       choices: strChoices(r, ans, [`${c.it}が ${a}${c.ic} と ${n}${c.ic}、あわせて いくつ`, `${c.it}が ${a + n}${c.ic} あって、${n}${c.ic}を とる`, `${c.cn}が ${n + 1}${c.cc}、1${c.cc}に ${c.it}が ${a}${c.ic}ずつ`]),
       explain: `${a} × ${n} は「${a}が ${n}つ分」。おなじ数ずつ ならんでいる おはなしを えらぼう。`}; }),
   MU('e3', 'expr', r => { const a = ri(r, 2, 5), n = sm(r, 2, 5, a);
-    return mulNum(r, a, n, `${a} × ${n} は いくつですか。`, `${a} × ${n} は「${a}が ${n}つ分」という いみだよ。${a}を くりかえし たしてみよう。`, `${a} × ${n} は ${repAdd(a, n)} と おなじ。こたえは ${a * n} だよ。`); }),
+    return mulNum(r, a, n, `${a} × ${n} は いくつですか。`, `${a} × ${n} は「${a}が ${n}つ分」という いみだよ。${a}を くりかえし たしてみよう。`, `${a} × ${n} は ${repAdd(a, n)} と おなじ。答えは${a * n} だよ。`); }),
   MU('e4', 'expr', r => { const a = ri(r, 2, 5), n = sm(r, 2, 5, a), ans = `${a} × ${n}`;
-    return {text: `${repAdd(a, n)} を かけざんの しきに かくと どれですか。`, answer: ans, nums: [a, n], expr: ans, groups: [a, n], hint: '同じ数を なんかい たしているかな。たす数が 1つ分、たした かいすうが いくつ分だよ。',
+    return {text: `${repAdd(a, n)} を かけざんの しきに かくと どれですか。`, answer: ans, nums: [a, n], expr: ans, groups: [a, n], hint: '同じ数を 何回 たしているかな。たす数が 1つ分、たした かいすうが いくつ分だよ。',
       choices: strChoices(r, ans, [`${a} + ${n}`, `${a} × ${n + 1}`, `${a + 1} × ${n}`]), explain: `${a}を ${n}かい たしているので ${a} × ${n} だよ。`}; }),
 ];
 // (c) times tables: 3 generators for each of the nine tables (symbols, a story, and a missing number)
 [2, 5, 3, 4, 6, 7, 8, 9, 1].forEach(k => {
   MULT_TEMPLATES.push(
     MU(`t${k}a`, `t${k}`, r => { const n = ri(r, 1, 9); return mulNum(r, k, n, `${k} × ${n} = □　□に はいる 数は？`, TOPIC['t' + k].hint, `${k} × ${n} = ${k * n}。${k}のだんの うたで たしかめよう。`, k * n <= 30); }),
-    MU(`t${k}b`, `t${k}`, r => { const n = ri(r, 2, 9), c = cobj(pick(r, CONT)); return mulNum(r, k, n, `${storyEq(c, k, n)}ぜんぶで なん${c.ic}ですか。`, `1つ分は ${k}${c.ic}。${k}のだんを つかって、いくつ分か かんがえよう。`, `${k} × ${n} = ${k * n}。こたえは ${k * n}${c.ic}だよ。`, k * n <= 30); }),
+    MU(`t${k}b`, `t${k}`, r => { const n = ri(r, 2, 9), c = cobj(pick(r, CONT)); return mulNum(r, k, n, `${storyEq(c, k, n)}全部で 何${c.ic}ですか。`, `1つ分は ${k}${c.ic}。${k}のだんを つかって、いくつ分か かんがえよう。`, `${k} × ${n} = ${k * n}。答えは${k * n}${c.ic}だよ。`, k * n <= 30); }),
     MU(`t${k}c`, `t${k}`, r => { const n = ri(r, 1, 9), P = k * n;
       return {text: `${k} × □ = ${P}　□に はいる 数は？`, answer: n, nums: [k, n], expr: `${k} × ${n}`, groups: null, hint: `${k}のだんを じゅんに いってみよう。${P}に なるのは なんばんめかな。`,
         choices: numChoices(r, n, [n + 1, n - 1, k, n + 2], 12), explain: `${k} × ${n} = ${P} だから、□は ${n} だよ。`}; }));
@@ -146,22 +146,22 @@ const MULT_TEMPLATES = [
 // (d) word problems in the fantasy village (including mixed add / subtract / multiply choices)
 MULT_TEMPLATES.push(
   MU('w1', 'mword', r => { const a = ri(r, 2, 5), n = sm(r, 2, 6, a), c = cobj(pick(r, FANT));
-    return mulNum(r, a, n, `むらの ${storyEq(c, a, n)}ぜんぶで なん${c.ic}ですか。`, TOPIC.mword.hint, `1つ分が ${a}${c.ic}で ${n}つ分。${a} × ${n} = ${a * n}。こたえは ${a * n}${c.ic}だよ。`); }),
+    return mulNum(r, a, n, `むらの ${storyEq(c, a, n)}全部で 何${c.ic}ですか。`, TOPIC.mword.hint, `1つ分が ${a}${c.ic}で ${n}つ分。${a} × ${n} = ${a * n}。答えは${a * n}${c.ic}だよ。`); }),
   MU('w2', 'mword', r => { const a = ri(r, 2, 5), n = sm(r, 2, 6, a), b = ri(r, 2, 9), c = cobj(pick(r, FANT.filter(x => x[3] !== '人'))), ans = a * n + b;
-    return {text: `${storyEq(c, a, n)}さらに ${b}${c.ic} ふえました。${c.it}は ぜんぶで なん${c.ic}ですか。`, answer: ans, nums: [a, n, b], expr: `${a} × ${n} + ${b}`, groups: null, hint: 'まず おなじ数ずつの ぶぶんを かけざんで もとめて、そのあと ふえた分を たそう。',
-      choices: numChoices(r, ans, [a * n, a * n - b, a + n + b, a * n + b + a]), explain: `${a} × ${n} = ${a * n}。そこへ ${b}を たして ${a * n} + ${b} = ${ans}。こたえは ${ans}${c.ic}だよ。`}; }),
+    return {text: `${storyEq(c, a, n)}さらに ${b}${c.ic} ふえました。${c.it}は 全部で 何${c.ic}ですか。`, answer: ans, nums: [a, n, b], expr: `${a} × ${n} + ${b}`, groups: null, hint: 'まず おなじ数ずつの ぶぶんを かけざんで もとめて、そのあと ふえた分を たそう。',
+      choices: numChoices(r, ans, [a * n, a * n - b, a + n + b, a * n + b + a]), explain: `${a} × ${n} = ${a * n}。そこへ ${b}を たして ${a * n} + ${b} = ${ans}。答えは${ans}${c.ic}だよ。`}; }),
   MU('w3', 'mword', r => { const a = ri(r, 2, 5), n = sm(r, 2, 6, a), c = cobj(pick(r, FANT.filter(x => x[3] !== '人'))), T0 = a * n, b = ri(r, 1, T0 - 2), ans = T0 - b;
-    return {text: `${storyEq(c, a, n)}そのうち ${b}${c.ic}を つかいました。のこりは なん${c.ic}ですか。`, answer: ans, nums: [a, n, b], expr: `${a} × ${n} − ${b}`, groups: null, hint: 'まず ぜんぶの 数を かけざんで もとめて、つかった分を ひこう。',
-      choices: numChoices(r, ans, [T0, T0 + b, a + n - b > 0 ? a + n - b : T0 + 2]), explain: `${a} × ${n} = ${T0}。つかった ${b}を ひいて ${T0} − ${b} = ${ans}。こたえは ${ans}${c.ic}だよ。`}; }),
+    return {text: `${storyEq(c, a, n)}そのうち ${b}${c.ic}を つかいました。のこりは 何${c.ic}ですか。`, answer: ans, nums: [a, n, b], expr: `${a} × ${n} − ${b}`, groups: null, hint: 'まず 全部の 数を かけざんで もとめて、つかった分を ひこう。',
+      choices: numChoices(r, ans, [T0, T0 + b, a + n - b > 0 ? a + n - b : T0 + 2]), explain: `${a} × ${n} = ${T0}。つかった ${b}を ひいて ${T0} − ${b} = ${ans}。答えは${ans}${c.ic}だよ。`}; }),
   MU('w4', 'mword', r => { const a = ri(r, 2, 5), n = sm(r, 2, 6, a), b = ri(r, 2, 6), c = cobj(pick(r, FANT.filter(x => x[3] !== '人'))), ans = `${c.cn}が ${n}${c.cc}。どの ${c.cn}にも ${c.it}が ${a}${c.ic}ずつ。ぜんぶで いくつ？`;
     return {text: 'つぎの うち、かけざんで とく もんだいは どれですか。', answer: ans, nums: [a, n], expr: `${a} × ${n}`, groups: null, hint: 'おなじ数ずつ いくつ分も ある ものを さがそう。あわせる・のこり・ちがいは かけざんでは ないよ。',
       choices: strChoices(r, ans, [`${c.it}が ${a}${c.ic}、あとから ${b}${c.ic} ふえた。ぜんぶで いくつ？`, `${c.it}が ${a + b}${c.ic} あって、${b}${c.ic}を つかった。のこりは いくつ？`, `あかい ${c.it}が ${a + b}${c.ic}、しろい ${c.it}が ${a}${c.ic}。ちがいは いくつ？`]),
       explain: `おなじ数ずつ ${n}つ分ある おはなしが かけざん（${a} × ${n}）。ほかは たしざんや ひきざんで とくよ。`}; }),
   MU('w5', 'mword', r => { const a = ri(r, 2, 5), n = sm(r, 2, 6, a), c = cobj(pick(r, FANT)), ans = `${a} × ${n}`, hi = Math.max(a, n), lo = Math.min(a, n);
-    return {text: `${storyEq(c, a, n)}ぜんぶの 数を もとめる しきは どれですか。`, answer: ans, nums: [a, n], expr: ans, groups: null, hint: TOPIC.mword.hint,
+    return {text: `${storyEq(c, a, n)}全部の 数を もとめる しきは どれですか。`, answer: ans, nums: [a, n], expr: ans, groups: null, hint: TOPIC.mword.hint,
       choices: strChoices(r, ans, [`${a} + ${n}`, `${hi} − ${lo}`, `${a} × ${n + 1}`]), explain: `おなじ数ずつ ${n}つ分だから ${ans}。たしざん・ひきざんでは ないよ。`}; }),
   MU('w6', 'mword', r => { const a = ri(r, 2, 5), n = sm(r, 2, 6, a);
-    return mulNum(r, a, n, `むらの おみせで あめを 1こ ${a}円で うっています。${n}こ かうと、ぜんぶで なん円ですか。`, '1こ分の ねだんが 1つ分。それが なんこ分かな。', `1こ ${a}円が ${n}こ分だから ${a} × ${n} = ${a * n}。こたえは ${a * n}円だよ。`, false); }),
+    return mulNum(r, a, n, `むらの おみせで あめを 1こ ${a}円で うっています。${n}こ かうと、全部で 何円ですか。`, '1こ分の ねだんが 1つ分。それが 何こ分かな。', `1こ ${a}円が ${n}こ分だから ${a} × ${n} = ${a * n}。答えは${a * n}円だよ。`, false); }),
 );
 
 function mathQuestion(tid, seed) {
@@ -187,7 +187,7 @@ function mathQuestion(tid, seed) {
   const choices = shuffle([ans].concat(ds.slice(0, 3)), r);
   return {subject: 'math', id: t.id, topic: t.topic, op: t.op, nums: [a, b], expr: t.op === '+' ? `${a} + ${b}` : `${a} − ${b}`, answer: ans, choices,
     text: t.text(a, b, o, pq[0], pq[1]), visual: '', hint: TOPIC[t.topic].hint,
-    explain: `しきは ${t.op === '+' ? a + ' + ' + b : a + ' − ' + b} = ${ans}。こたえは ${ans} だよ。`};
+    explain: `しきは ${t.op === '+' ? a + ' + ' + b : a + ' − ' + b} = ${ans}。答えは${ans} だよ。`};
 }
 
 /* ---------------- Japanese (reading) and English (word-picture) — 10 curated items each ----------------
@@ -196,13 +196,13 @@ const JA_ITEMS = [
   {id: 'ja1', prompt: '「ねこ」は どれ？', visual: '', choices: ['🐱', '🐶', '🐟', '🐦'], answer: '🐱', hint: 'ねこは「にゃーん」となくよ。「ね」で はじまるね。'},
   {id: 'ja2', prompt: '「さかな」は どれ？', visual: '', choices: ['🐟', '🐰', '🌳', '🍎'], answer: '🐟', hint: 'さかなは みずの なかを およぐよ。'},
   {id: 'ja3', prompt: '「りんご」は どれ？', visual: '', choices: ['🍎', '🍌', '🍇', '🍊'], answer: '🍎', hint: '「り」で はじまる あかい くだものだよ。'},
-  {id: 'ja4', prompt: '「山」は どう読む？', visual: '⛰️', choices: ['やま', 'かわ', 'そら', 'うみ'], answer: 'やま', hint: '絵を よく見てね。たかく もりあがった ところだよ。'},
-  {id: 'ja5', prompt: '「川」は どう読む？', visual: '🏞️', choices: ['かわ', 'やま', 'はな', 'いし'], answer: 'かわ', hint: '「川」は みずが ながれる ところだよ。'},
-  {id: 'ja6', prompt: '「木」は どう読む？', visual: '🌳', choices: ['き', 'くさ', 'はな', 'いえ'], answer: 'き', hint: 'はっぱが しげる、大きな しょくぶつだよ。'},
+  {id: 'ja4', prompt: '「山」は どう読む？', literal: 1, visual: '⛰️', choices: ['やま', 'かわ', 'そら', 'うみ'], answer: 'やま', hint: '絵を よく見てね。たかく もりあがった ところだよ。'},
+  {id: 'ja5', prompt: '「川」は どう読む？', literal: 1, visual: '🏞️', choices: ['かわ', 'やま', 'はな', 'いし'], answer: 'かわ', hint: '「川」は みずが ながれる ところだよ。'},
+  {id: 'ja6', prompt: '「木」は どう読む？', literal: 1, visual: '🌳', choices: ['き', 'くさ', 'はな', 'いえ'], answer: 'き', hint: 'はっぱが しげる、大きな しょくぶつだよ。'},
   {id: 'ja7', prompt: '「あか」は どの いろ？', visual: '', choices: ['🔴', '🔵', '🟢', '🟡'], answer: '🔴', hint: 'りんごや トマトの いろだよ。'},
-  {id: 'ja8', prompt: '「うさぎが にんじんを たべます。」 たべるのは だれ？', visual: '🐰🥕', choices: ['うさぎ', 'にんじん', 'ねこ', 'くま'], answer: 'うさぎ', hint: '「〜が」のまえの ことばが、することの 主人公だよ。'},
-  {id: 'ja9', prompt: '「ことりが うたっています。」 なにが うたっていますか？', visual: '🐦🎶', choices: ['ことり', 'ぞう', 'さかな', 'かえる'], answer: 'ことり', hint: '文の はじめを 見てみよう。「〜が」の まえだよ。'},
-  {id: 'ja10', prompt: '「あめが ふってきたので、かさを さしました。」 どうして かさを さしましたか？', visual: '☔', choices: ['あめが ふってきたから', 'ねむいから', 'おなかが すいたから', 'さむいから'], answer: 'あめが ふってきたから', hint: '「〜ので」の まえに りゆうが かいてあるよ。'},
+  {id: 'ja8', prompt: '「うさぎが にんじんを たべます。」 たべるのは だれ？', visual: '🐰🥕', choices: ['うさぎ', 'にんじん', 'ねこ', 'くま'], answer: 'うさぎ', hint: '「〜が」のまえの 言葉が、することの 主人公だよ。'},
+  {id: 'ja9', prompt: '「ことりが うたっています。」 何が うたっていますか？', visual: '🐦🎶', choices: ['ことり', 'ぞう', 'さかな', 'かえる'], answer: 'ことり', hint: '文の はじめを 見てみよう。「〜が」の まえだよ。'},
+  {id: 'ja10', prompt: '「雨が ふってきたので、かさを さしました。」 どうして かさを さしましたか？', visual: '☔', choices: ['雨が ふってきたから', 'ねむいから', 'おなかが すいたから', 'さむいから'], answer: '雨が ふってきたから', hint: '「〜ので」の まえに りゆうが かいてあるよ。'},
 ];
 const EN_ITEMS = [
   {id: 'en1', prompt: 'この えは どの ことば？', visual: '🐶', choices: ['dog', 'cat', 'bird', 'fish'], answer: 'dog', hint: 'dog は「ワンワン」と なくどうぶつ。d で はじまるよ。'},
@@ -220,7 +220,7 @@ const ITEMS_OF = {japanese: JA_ITEMS, english: EN_ITEMS};
 function itemQuestion(subject, id, seed) {
   const it = (ITEMS_OF[subject] || []).find(x => x.id === id);
   if (!it) return null;
-  return {subject, id: it.id, topic: it.id, op: '', nums: [], expr: '', answer: it.answer, choices: shuffle(it.choices, prng(seed)), text: it.prompt, visual: it.visual, hint: it.hint,
+  return {subject, id: it.id, topic: it.id, op: '', nums: [], expr: '', literal: !!it.literal, answer: it.answer, choices: shuffle(it.choices, prng(seed)), text: it.prompt, visual: it.visual, hint: it.hint,
     explain: `こたえは「${it.answer}」だよ。もういちど 文や えを よく見てみよう。`};
 }
 const build = p => p && (p.subject === 'math' ? mathQuestion(p.tid, p.seed) : itemQuestion(p.subject, p.tid, p.seed));
@@ -467,10 +467,128 @@ function selfTest() {
   const t2 = {}; for (let i = 0; i < 1000; i++) { const k = chooseTopic(L, D, prng(i * 17 + 3)); t2[k] = (t2[k] || 0) + 1; }
   must((t2.t2 || 0) + (t2.t5 || 0) > 0, 'times tables 2/5 appear (as ahead items) once groups + expr have progress');
   must(!t2.t6 && !t2.t7 && !t2.t8 && !t2.t9, 'tables 6-9 stay closed without t3/t4 progress');
+  KVRead.check().forEach(m => bad.push('v10 reading: ' + m));
   for (let u = 0; u < UNITS.length; u++) for (const mode of ['normal', 'ahead', 'reinforce']) { const X = newState(); setSettings(X, u, mode); for (let i = 0; i < 60; i++) { const pp = next(X, 'math', D, i * 5 + 1); must(!!build(pp), 'selection builds ' + u + mode); X.pending.math = null; } }
   return bad;
 }
-const api = {SUBJECTS, NEED, DAILY_MATH_CAP, MAX_WRONG, FACTOR, TOPIC, UNITS, DEFAULT_UNIT, MULT_TEMPLATES, progress, MASTERED, isWeak, isDue, topicOpen, chooseTopic, setSettings, selfTest, isHard, MATH_TEMPLATES, JA_ITEMS, EN_ITEMS, mathQuestion, itemQuestion, build, newState, migrateLearn, today, rewardable,
+/* ---------------- v10 kanji readability layer ----------------
+ * Question text is authored with natural kanji vocabulary; at display time every kanji word is checked against the child's known set.
+ * Known kanji are shown plainly, other words get <ruby> from the VOCAB table (explicit, hand-vetted readings — never guessed from single
+ * characters) or, with ふりがな off, are shown in kana from the same table. A kanji that is in no table entry is reported by selfTest(), never guessed.
+ * Grade allocation: the official 学年別漢字配当表 (小学校学習指導要領): 1年 80字, 2年 160字. The sets below are checked for size in selfTest(). */
+const KVRead = (() => {
+const G1 = '一右雨円王音下火花貝学気九休玉金空月犬見五口校左三山子四糸字耳七車手十出女小上森人水正生青夕石赤千川先早草足村大男竹中虫町天田土二日入年白八百文木本名目立力林六';
+const G2 = '引羽雲園遠何科夏家歌画回会海絵外角楽活間丸岩顔汽記帰弓牛魚京強教近兄形計元言原戸古午後語工公広交光考行高黄合谷国黒今才細作算止市矢姉思紙寺自時室社弱首秋週春書少場色食心新親図数西声星晴切雪船線前組走多太体台地池知茶昼長鳥朝直通弟店点電刀冬当東答頭同道読内南肉馬売買麦半番父風分聞米歩母方北毎妹万明鳴毛門夜野友用曜来里理話';
+/* Default "partial grade 2": a deliberately small, conservative guess (words children meet in 算数・国語 every day). It is an approximation, NOT a claim about which kanji any textbook has taught; parents can add kanji below. */
+const G2_PART = '何今数算国語読書来行時分間';
+const LEVELS = [
+  {id: 'g1', label: '1年生の漢字まで', note: '1年生で ならった 漢字だけ そのまま。ほかは ふりがな付き。', known: G1},
+  {id: 'g2part', label: '1年生＋2年生の一部（はじめの設定）', note: '1年生の 漢字と、よく出る 2年生の漢字（' + G2_PART + '）。目安で、学校の 進みぐあいとは 限りません。', known: G1 + G2_PART},
+  {id: 'g2full', label: '2年生の漢字ぜんぶ', note: '1・2年生の 漢字は そのまま。3年生いじょうの 漢字だけ ふりがな付き。', known: G1 + G2},
+  {id: 'all', label: 'ぜんぶ 漢字＋ふりがな', note: 'どの 漢字にも ふりがなを つけます。', known: ''},
+];
+const DEFAULT_LEVEL = 'g2part', READ_KEY = 'kv-storybook-demo:v10-reading', READ_V = 1;
+/* {漢字|よみ} marks the part that carries ruby; the text around it (okurigana, particles) is plain. Counter kanji straight after a numeral (3人, 2日) are never annotated: their reading depends on the numeral (ひとり, ふつか). */
+const VOCAB_SRC = ['{全部|ぜんぶ}', '{合|あ}わせ', '{何|なん}', '{何人|なんにん}', '{何|なに}が', '{何|なに}を', '{何回|なんかい}', '{何日|なんにち}', '{公園|こうえん}', '{来|き}ました', '{来|き}て',
+  '{今|いま}', '{友|とも}だち', '{多|おお}い', '{多|おお}く', '{大|おお}きい', '{大|おお}きな', '{小|ちい}さい', '{少|すく}ない', '{長|なが}い', '{長|なが}さ', '{短|みじか}い',
+  '{赤|あか}い', '{赤|あか}チーム', '{白|しろ}い', '{白|しろ}チーム', '{青|あお}チーム', '{黄色|きいろ}チーム', '{本|ほん}を', '{読|よ}', '{買|か}います', '{毎日|まいにち}',
+  '{子|こ}ども', '{男|おとこ}の{子|こ}', '{女|おんな}の{子|こ}', '{同|おな}じ', '{考|かんが}え', 'お{話|はなし}', '{答|こた}え', '{数|かず}', '{数|かぞ}え', '{絵|え}', '{見|み}', '{文|ぶん}',
+  '{主人公|しゅじんこう}', '{言葉|ことば}', '{雨|あめ}', '{一|いち}', '{円|えん}', '{回|かい}', '{人|ひと}', '{分|ぶん}'];
+const KANJI = /[一-鿿々]/, DIGIT = /[0-9０-９]/;
+const VOCAB = new Map();                      // first character -> entries, longest surface first
+VOCAB_SRC.forEach(src => {
+  const parts = []; let surface = '';
+  src.split(/(\{[^}]+\})/).forEach(s => {
+    if (!s) return;
+    const m = /^\{([^|]+)\|([^}]+)\}$/.exec(s);
+    if (m) { parts.push({k: m[1], r: m[2]}); surface += m[1]; } else { parts.push({t: s}); surface += s; }
+  });
+  const e = {surface, parts}, f = surface[0];
+  if (!VOCAB.has(f)) VOCAB.set(f, []);
+  VOCAB.get(f).push(e);
+});
+VOCAB.forEach(a => a.sort((x, y) => y.surface.length - x.surface.length));
+const cfg = {v: READ_V, level: DEFAULT_LEVEL, ruby: true, extra: []};
+const levelOf = id => LEVELS.find(l => l.id === id) || LEVELS[1];
+function knownSet() { return new Set((levelOf(cfg.level).known + cfg.extra.join('')).split('')); }
+/* Splits text into plain strings and {k, r} ruby groups. opt: {ruby, known (Set), literal (keep 「…」 untouched), stray (array collecting uncovered kanji)}. */
+function segs(text, opt) {
+  text = String(text == null ? '' : text);
+  const o = opt || {}, known = o.known || knownSet(), ruby = o.ruby !== false, out = []; let buf = '', i = 0;
+  const flush = () => { if (buf) { out.push(buf); buf = ''; } };
+  while (i < text.length) {
+    const c = text[i];
+    if (o.literal && c === '「') { const j = text.indexOf('」', i); if (j > i) { buf += text.slice(i, j + 1); i = j + 1; continue; } }
+    if ((c === '人' || c === '日') && i > 0 && DIGIT.test(text[i - 1])) { buf += c; i++; continue; }
+    const list = VOCAB.get(c); let hit = null;
+    if (list) for (const e of list) if (text.startsWith(e.surface, i)) { hit = e; break; }
+    if (hit) {
+      hit.parts.forEach(p => {
+        if (p.t != null) buf += p.t;
+        else if ([...p.k].every(ch => known.has(ch))) buf += p.k;
+        else if (ruby) { flush(); out.push({k: p.k, r: p.r}); } else buf += p.r;
+      });
+      i += hit.surface.length; continue;
+    }
+    if (KANJI.test(c) && o.stray) o.stray.push(c);
+    buf += c; i++;
+  }
+  flush();
+  return out;
+}
+const kana = (text, ruby) => segs(text, {ruby: !!ruby}).map(s => typeof s === 'string' ? s : s.k).join('');
+function render(text, opt) {                  // DocumentFragment: text nodes + <ruby> elements (no innerHTML, nothing to inject)
+  const f = document.createDocumentFragment();
+  segs(text, Object.assign({ruby: cfg.ruby}, opt)).forEach(s => {
+    if (typeof s === 'string') { f.appendChild(document.createTextNode(s)); return; }
+    const r = document.createElement('ruby'), rt = document.createElement('rt'), a = document.createElement('rp'), b = document.createElement('rp');
+    a.textContent = '('; b.textContent = ')'; rt.textContent = s.r;
+    r.appendChild(document.createTextNode(s.k)); r.appendChild(a); r.appendChild(rt); r.appendChild(b); f.appendChild(r);
+  });
+  return f;
+}
+function load() {
+  try {
+    const raw = typeof localStorage !== 'undefined' && localStorage.getItem(READ_KEY); if (!raw) return;
+    const s = JSON.parse(raw);
+    if (s && typeof s === 'object') {
+      if (LEVELS.some(l => l.id === s.level)) cfg.level = s.level;
+      if (typeof s.ruby === 'boolean') cfg.ruby = s.ruby;
+      if (Array.isArray(s.extra)) cfg.extra = [...new Set(s.extra.filter(x => typeof x === 'string' && x.length === 1 && KANJI.test(x)))].slice(0, 300);
+    }
+  } catch (e) { /* unreadable settings: keep defaults */ }
+}
+function save() { try { if (typeof localStorage !== 'undefined') localStorage.setItem(READ_KEY, JSON.stringify({v: READ_V, level: cfg.level, ruby: cfg.ruby, extra: cfg.extra})); } catch (e) { /* ignore */ } }
+function addKnown(str) { const added = []; [...String(str)].forEach(ch => { if (KANJI.test(ch) && ch !== '々' && !cfg.extra.includes(ch) && cfg.extra.length < 300) { cfg.extra.push(ch); added.push(ch); } }); return added; }
+function check() {                            // returns failure strings; [] = fine
+  const bad = [], must = (c, m) => { if (!c) bad.push(m); };
+  must([...G1].length === 80 && new Set(G1).size === 80, 'grade-1 kanji set must be 80 distinct (got ' + [...G1].length + ')');
+  must([...G2].length === 160 && new Set(G2).size === 160, 'grade-2 kanji set must be 160 distinct (got ' + [...G2].length + ')');
+  must([...G1].every(ch => !G2.includes(ch)), 'grade sets overlap');
+  must([...G2_PART].every(ch => G2.includes(ch)), 'default partial set must be grade-2 kanji');
+  const seen = new Set();
+  VOCAB.forEach(a => a.forEach(e => { must(!seen.has(e.surface), 'duplicate vocab ' + e.surface); seen.add(e.surface); e.parts.forEach(p => { if (p.k) must([...p.k].every(ch => KANJI.test(ch)) && /^[ぁ-ゟー]+$/.test(p.r), 'bad vocab ' + e.surface); }); }));
+  const cover = (q, tag) => {
+    const use = (x, w) => { const st = []; segs(x, {ruby: true, known: new Set(), literal: !!q.literal, stray: st}); if (st.length) bad.push('kanji without vetted reading in ' + w + ' ' + tag + ': ' + st.join('')); };
+    use(q.text, 'text'); use(q.hint, 'hint'); use(q.explain, 'explain'); q.choices.forEach(c => use(String(c), 'choice'));
+  };
+  MATH_TEMPLATES.forEach(t => { for (let s = 1; s <= 60; s++) cover(mathQuestion(t.id, s * 131 + 7), t.id + ':' + s); });
+  MULT_TEMPLATES.forEach(t => { for (let s = 1; s <= 60; s++) cover(mathQuestion(t.id, s * 131 + 7), t.id + ':' + s); });
+  JA_ITEMS.concat(EN_ITEMS).forEach(it => cover(itemQuestion(it.id.startsWith('ja') ? 'japanese' : 'english', it.id, 5), it.id));
+  Object.keys(TOPIC).forEach(k => { const st = []; segs(TOPIC[k].hint + TOPIC[k].label, {ruby: true, known: new Set(), stray: st}); if (st.length) bad.push('kanji without vetted reading in topic ' + k + ': ' + st.join('')); });
+  // behaviour: ruby appears exactly for unknown words; rewording to kana when furigana is off; numeral counters and the literal-quote exercise are untouched
+  const K1 = new Set(G1), has = (x, o) => segs(x, o).some(s => typeof s !== 'string');
+  must(has('公園に 子どもが いた', {ruby: true, known: K1}) && !has('男の子が 3人 いる', {ruby: true, known: K1}), 'ruby only for unknown words');
+  must(segs('公園に 友だちと', {ruby: false, known: K1}).join('') === 'こうえんに ともだちと', 'kana fallback');
+  must(segs('3人 2日', {ruby: true, known: new Set()}).every(s => typeof s === 'string'), 'numeral + counter stays plain');
+  must(segs('「山」は 読む', {ruby: true, known: new Set(), literal: true})[0] === '「山」は ', 'literal quote exercise');
+  must(JSON.stringify(segs('来ました', {ruby: true, known: new Set()})) === '[{"k":"来","r":"き"},"ました"]', 'okurigana outside ruby');
+  return bad;
+}
+return {G1, G2, G2_PART, LEVELS, cfg, levelOf, knownSet, segs, kana, render, load, save, addKnown, check, DEFAULT_LEVEL, READ_KEY};
+})();
+
+const api = {read: KVRead, SUBJECTS, NEED, DAILY_MATH_CAP, MAX_WRONG, FACTOR, TOPIC, UNITS, DEFAULT_UNIT, MULT_TEMPLATES, progress, MASTERED, isWeak, isDue, topicOpen, chooseTopic, setSettings, selfTest, isHard, MATH_TEMPLATES, JA_ITEMS, EN_ITEMS, mathQuestion, itemQuestion, build, newState, migrateLearn, today, rewardable,
   current, next, answer, useHint, claim, rewardFor, summary, exportStats, resetStats, levelOf};
 if (typeof module !== 'undefined' && module.exports) module.exports = api;
 return api;
@@ -2220,6 +2338,41 @@ const SUBJ_NOTE = {math: '文しょうだいを よんで、たしざん・ひ�
 let studyView = null;                                   // null = subject list, otherwise the open subject
 function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
 function syncSkills() { KVLearn.SUBJECTS.forEach(k => { S.skills[k] = L.solved[k]; }); }
+/* ----- v10 reading level (own additive key, never the village / learning save) ----- */
+const R = KVLearn.read; R.load();
+function furiToggle() {                       // child-accessible: switches ruby on/off only; the kanji level (what counts as learned) is untouched
+  const b = el('button', 'q-furi'); b.type = 'button'; b.setAttribute('aria-pressed', String(R.cfg.ruby));
+  b.textContent = 'ふりがな ' + (R.cfg.ruby ? 'あり' : 'なし');
+  b.addEventListener('click', () => { R.cfg.ruby = !R.cfg.ruby; R.save(); rerenderStudy(true); });
+  return b;
+}
+function renderReading(box) {
+  box.appendChild(el('h4', '', '漢字の よみやすさ（おうちの方が えらぶ）'));
+  box.appendChild(el('p', 'note', 'ならった 漢字は そのまま、まだの 漢字は ふりがな付きで 出します。ふりがな「なし」では まだの 漢字を ひらがなで 出します（漢字レベルは かわりません）。学校で どの漢字を ならったかは このデモでは わかりません。目安として えらんでください。'));
+  const grp = el('div', 'unit-list'); grp.setAttribute('role', 'radiogroup'); grp.setAttribute('aria-label', '漢字の レベル');
+  R.LEVELS.forEach(l => {
+    const b = el('button', 'unit-btn', l.label); b.type = 'button'; b.setAttribute('role', 'radio'); b.setAttribute('aria-checked', String(l.id === R.cfg.level));
+    b.addEventListener('click', () => { R.cfg.level = l.id; R.save(); rerenderStudy(true); });
+    grp.appendChild(b);
+  });
+  box.appendChild(grp);
+  box.appendChild(el('p', 'note', R.levelOf(R.cfg.level).note));
+  const row = el('div', 'parent-btns'), tg = furiToggle(); row.appendChild(tg); box.appendChild(row);
+  box.appendChild(el('p', 'note', '「おぼえた漢字」を 足すと、その漢字は ふりがななしで 出ます（きろくは けしません）。'));
+  const add = el('div', 'parent-btns'), inp = el('input'); inp.type = 'text'; inp.className = 'gate-in kanji-in'; inp.setAttribute('aria-label', 'おぼえた漢字を 入力'); inp.maxLength = 20; inp.placeholder = '例：園';
+  const go = el('button', '', '足す'); go.type = 'button';
+  go.addEventListener('click', () => { const a = R.addKnown(inp.value); R.save(); toast(a.length ? `${a.join('')} を おぼえた漢字に 足しました` : '足せる 漢字が ありません'); rerenderStudy(true); });
+  add.appendChild(inp); add.appendChild(go); box.appendChild(add);
+  if (R.cfg.extra.length) {
+    const chips = el('div', 'kchips');
+    R.cfg.extra.forEach(ch => {
+      const c = el('button', 'kchip', ch + ' ×'); c.type = 'button'; c.setAttribute('aria-label', ch + ' を とりけす');
+      c.addEventListener('click', () => { R.cfg.extra = R.cfg.extra.filter(x => x !== ch); R.save(); rerenderStudy(true); });
+      chips.appendChild(c);
+    });
+    box.appendChild(chips);
+  }
+}
 function renderStudy(body) {
   body.innerHTML = '';
   if (studyView) renderQuestion(body, studyView); else renderStudyHome(body);
@@ -2246,6 +2399,7 @@ function renderStudyHome(body) {
     g.appendChild(b);
   });
   body.appendChild(g);
+  const fr = el('div', 'parent-btns'); fr.appendChild(furiToggle()); body.appendChild(fr);
   body.appendChild(el('p', 'note', 'ただしく こたえた ときだけ ごほうびがもらえるよ。ゲージは 新しい建物が 使えるようになるまでの せいかい数。'));
   renderParent(body);
 }
@@ -2294,6 +2448,7 @@ function renderSettings(d) {
   box.appendChild(mg);
   const nx = units[Math.min(units.length - 1, s.unit + 1)];
   box.appendChild(el('p', 'note', `つぎの 目安：${s.unit + 1 < units.length ? nx.label : 'この デモの さいごの 単元です'}。もんだいの わりあいは いまの単元 約60%、ふくしゅう 約30%、先どり 約10%（先どりは 前の トピックが できているときだけ。ふくしゅう多めでは 先どり なし）。${UNIT_WEEKS_NOTE}`));
+  renderReading(box);
   const lock = el('button', '', 'せっていを とじる'); lock.type = 'button'; lock.addEventListener('click', () => { parentGate = null; rerenderStudy(true); });
   const row = el('div', 'parent-btns'); row.appendChild(lock); box.appendChild(row);
   d.appendChild(box);
@@ -2349,7 +2504,7 @@ function feedbackFor(p, q) {
     }
     return {cls: 'good', text: 'せいかい！🎉 きょうの ごほうびは もう もらったので、これは れんしゅうだよ。'};
   }
-  return {cls: 'soft', text: `いっしょに みてみよう。${q.explain} つぎの もんだいで また ちょうせんしよう。`};
+  return {cls: 'soft', jp: 1, text: 'いっしょに みてみよう。', tail: ' つぎの もんだいで また ちょうせんしよう。'};
 }
 function renderQuestion(body, subj) {
   const day = KVLearn.today();
@@ -2361,11 +2516,12 @@ function renderQuestion(body, subj) {
   back.addEventListener('click', () => { studyView = null; rerenderStudy(); });
   top.appendChild(back);
   top.appendChild(el('span', 'q-subj', `${SUBJ_ICON[subj]} ${SKILL_NAME[subj]}`));
+  top.appendChild(furiToggle());
   const prog = el('span', 'q-prog', `かいほう ${Math.min(L.solved[subj], SKILL_NEED[subj])}/${SKILL_NEED[subj]}`); top.appendChild(prog);
   box.appendChild(top);
   box.appendChild(meterEl(subj));
   if (q.visual) box.appendChild(el('div', 'q-visual', q.visual));
-  box.appendChild(el('p', 'q-text', q.text));
+  const qt = el('p', 'q-text'); qt.appendChild(R.render(q.text, {literal: q.literal})); box.appendChild(qt);
   if (q.groups && q.groups[0] >= 1 && q.groups[1] >= 1 && q.groups[0] <= 9 && q.groups[1] <= 9) {      // equal groups drawn with plain DOM (no canvas)
     const gv = el('div', 'q-groups'); gv.setAttribute('role', 'img'); gv.setAttribute('aria-label', `${q.groups[0]}こずつ ${q.groups[1]}つ分の ず`);
     for (let i = 0; i < q.groups[1]; i++) { const g = el('span', 'grp'); for (let j = 0; j < q.groups[0]; j++) g.appendChild(el('i', 'dot')); gv.appendChild(g); }
@@ -2374,7 +2530,7 @@ function renderQuestion(body, subj) {
   const long = q.choices.some(c => String(c).length > 6);
   const ch = el('div', 'q-choices' + (long ? ' long' : ''));
   q.choices.forEach(c => {
-    const b = el('button', 'q-choice', String(c)); b.type = 'button';
+    const b = el('button', 'q-choice'); b.type = 'button'; b.appendChild(R.render(String(c)));
     const wrong = p.wrong.includes(c), right = p.done && c === q.answer;
     if (wrong) { b.classList.add('wrong'); b.disabled = true; b.setAttribute('aria-label', String(c) + ' ちがうよ'); }
     if (right) { b.classList.add('right'); b.setAttribute('aria-label', String(c) + ' せいかい'); }
@@ -2389,8 +2545,10 @@ function renderQuestion(body, subj) {
   act.appendChild(hb);
   if (p.done) { const nb = el('button', 'q-next', 'つぎの もんだい ▶'); nb.type = 'button'; nb.addEventListener('click', () => { KVLearn.next(L, subj, KVLearn.today()); saveNow(); rerenderStudy(); }); act.appendChild(nb); }
   box.appendChild(act);
-  if (p.hint || p.done) box.appendChild(el('p', 'q-hinttext', '💡 ' + q.hint));
-  const fb = feedbackFor(p, q), f = el('p', 'q-fb ' + fb.cls, fb.text); f.setAttribute('role', 'status'); box.appendChild(f);
+  if (p.hint || p.done) { const ht = el('p', 'q-hinttext', '💡 '); ht.appendChild(R.render(q.hint, {literal: q.literal})); box.appendChild(ht); }
+  const fb = feedbackFor(p, q), f = el('p', 'q-fb ' + fb.cls); f.setAttribute('role', 'status');
+  if (fb.jp) { f.appendChild(document.createTextNode(fb.text)); f.appendChild(R.render(q.explain)); f.appendChild(document.createTextNode(fb.tail)); } else f.textContent = fb.text;
+  box.appendChild(f);
   if (!p.done) box.appendChild(el('p', 'note', p.practice ? '※ これは れんしゅう：きょうの ごほうびは もう もらいました。' : SUBJ_NOTE[subj]));
   body.appendChild(box);
 }
