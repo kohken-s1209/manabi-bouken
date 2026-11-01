@@ -1,0 +1,17 @@
+# Knowledge Village v10 — 国語の進度と漢字表示の連動
+
+## Confirmed setup
+- Child uses 光村図書 小学2年「国語」 and 大日本図書 小学2年「算数」.
+- v9 has been positively evaluated for multiplication, maths learning, rewards, pace setting and responsive mobile performance. Preserve all.
+- Most recent feedback: question text uses far too much hiragana. Use learned kanji naturally; avoid using unlearned kanji without furigana.
+
+## Required feature
+1. Implement a **safe kanji readability layer** across Math/Japanese/English question text, explanations, buttons where appropriate, and learning narratives. Use grade-1/grade-2 official jōyō education kanji lists (verify explicit sets) to classify each kanji. Do not indiscriminately convert every hiragana to kanji—use proper natural Japanese orthography, meaningful vocabulary, and correct inflections (e.g. 公園, 全部, 何人, 来ました). Do not use unnatural replacements.
+2. Add parent-facing settings for reading level: Grade-1 mastered; Grade-2 through current school unit (default approximation as of early Nov, not a claim of precise acquisition); Grade-2 full kanji; and a fully readable mode (furigana for not-yet-learned). Parent may manually override/mark kanji known (if feasible) without deleting prior data. Make the default readable with regular 1st-grade kanji and conservative 2nd-grade choices; do not assert which specific 2nd-grade characters were taught without confirming the textbook's exact section.
+3. For text that includes kanji beyond child's selected learned set, show proper furigana with HTML ruby/rt, generated from **verified vocabulary with explicit readings**. Do NOT guess readings from individual characters, especially compounds, names or irregular readings. If ruby reading is unknown, use easier rewording in kana; don't display unknown kanji naked. Avoid auto-phonetic conversion guesses. Use documented vetted vocabulary map and graceful fallbacks.
+4. Use coherent word-level Japanese spellings rather than naive character-by-character conversion. Rewrite existing problem templates (at minimum math addition, subtraction, equal-groups/multiplication word problems) using natural kanji vocabulary, with validated readings. Preserve arithmetic and answers exactly. Dynamic numeric substitution must remain safe and preserve texts. Avoid copying copyrighted textbooks.
+5. Optionally apply to selected UI instructional texts, especially headings, build/learn explanations. Prioritize question readability. Readability toggle accessible to child/parent as "ふりがな あり/なし" without lowering the underlying skill level.
+6. Retain original v9 localStorage save key, village state, learned counts, rewards, question history. Make any new settings additive, versioned and safely migrated; do not reset or modify main app storage.
+7. **Non-regression**: Never degrade v6+ low-cost cached Canvas render, bridge, forest expansion, all subject tests, device navigation, correct answer rewards, correct answer grading. DOM ruby layout should be tested at ~360px width and tablet; no one-character-wide UI/modal.
+8. Include concise manual QA demonstration in README with 8 before/after samples for grade-1, partial-grade-2, and furigana cases. Verify official school grade allocation and don't pretend exact November teaching schedule known. No external network and no libraries at runtime.
+9. Strict write scope only storybook-demo/{index.html,style.css,app.js,README.md}; no secret/workflow/main-game modifications. For parent reference 光村図書 official yearly plan https://www.mitsumura-tosho.co.jp/kyokasho/s-kokugo/keikaku.
